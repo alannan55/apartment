@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}合同 - 悦山公寓运营{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div><h1>合同</h1></div>
+  <div class="actions">
+    <a class="button primary" href="{% url 'sign_contract' %}">签约</a>
+  </div>
+</section>
+<section class="panel">
+  <nav class="tabs">
+    <a class="{% if sort == 'room' %}active{% endif %}" href="{% url 'tenancy_list' %}?sort=room">按房间号</a>
+    <a class="{% if sort == 'start' %}active{% endif %}" href="{% url 'tenancy_list' %}?sort=start">按起租日</a>
+    <a class="{% if sort == 'checkout' %}active{% endif %}" href="{% url 'tenancy_list' %}?sort=checkout">按退租日</a>
+  </nav>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>房间</th><th>租客</th><th>租期</th><th>预计/实际退租</th><th>月租</th><th>押金</th><th>状态</th><th>欠款</th><th>操作</th></tr></thead>
+      <tbody>
+        {% for tenancy in tenancies %}
+          <tr>
+            <td><strong>{{ tenancy.room.number }}</strong></td>
+            <td>{{ tenancy.primary_person.name }}</td>
+            <td>{{ tenancy.start_date|date:"Y-m-d" }} 至 {{ tenancy.end_date|date:"Y-m-d" }}</td>
+            <td>
+              {% if tenancy.move_out_date %}
+                实际 {{ tenancy.move_out_date|date:"Y-m-d" }}
+              {% elif tenancy.planned_move_out_date %}
+                <span class="amount-warn">预计 {{ tenancy.planned_move_out_date|date:"Y-m-d" }}</span>
+              {% else %}
+                -
+              {% endif %}
+            </td>
+            <td>¥{{ tenancy.monthly_rent }}</td>
+            <td>¥{{ tenancy.deposit_amount }}</td>
+            <td>{{ tenancy.get_status_display }}</td>
+            <td class="{% if tenancy.balance > 0 %}amount-warn{% endif %}">¥{{ tenancy.balance }}</td>
+            <td class="row-actions">
+              <a href="{% url 'room_detail' tenancy.room.id %}">房间</a>
+              <a href="{% url 'tenancy_edit' tenancy.id %}">修改</a>
+              <a href="{% url 'payment_create' %}?room={{ tenancy.room.id }}">收付款</a>
+              {% if tenancy.status == "active" %}
+                <a href="{% url 'move_tenancy' tenancy.id %}">换房</a>
+                <a href="{% url 'checkout_tenancy' tenancy.id %}">退租</a>
+              {% endif %}
+              <form method="post" action="{% url 'tenancy_delete' tenancy.id %}" class="inline-form">
+                {% csrf_token %}
+                <button class="link-button" type="submit">删除</button>
+              </form>
+            </td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="9" class="empty">暂无合同</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

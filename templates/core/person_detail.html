@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}{{ person.name }} - 悦山公寓运营{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <h1>{{ person.name }}</h1>
+    <p class="mono">{{ person.id_number }}</p>
+  </div>
+  <div class="actions">
+    <a class="button primary" href="{% url 'person_stay_create' person.id %}">添加入住</a>
+    <a class="button" href="{% url 'person_edit' person.id %}">修改人员</a>
+  </div>
+</section>
+
+<section class="split">
+  <div class="panel">
+    <div class="section-title"><h2>基础信息</h2></div>
+    <dl class="detail-list">
+      <dt>电话</dt><dd>{{ person.phone|default:"-" }}</dd>
+      <dt>联系人</dt><dd>{{ person.emergency_name|default:"-" }}</dd>
+      <dt>联系电话</dt><dd>{{ person.emergency_phone|default:"-" }}</dd>
+      <dt>联系地址</dt><dd>{{ person.emergency_address|default:"-" }}</dd>
+      <dt>备注</dt><dd>{{ person.notes|default:"-" }}</dd>
+    </dl>
+  </div>
+  <div class="panel">
+    <div class="section-title">
+      <h2>入住记录</h2>
+      <a href="{% url 'person_stay_create' person.id %}">新增</a>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>房间</th><th>类型</th><th>起止</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody>
+          {% for stay in stays %}
+            <tr>
+              <td><a href="{% url 'room_detail' stay.room.id %}">{{ stay.room.number }}</a></td>
+              <td>{{ stay.get_stay_type_display }}</td>
+              <td>{{ stay.start_date|date:"Y-m-d" }}{% if stay.end_date %} 至 {{ stay.end_date|date:"Y-m-d" }}{% endif %}</td>
+              <td>{% if stay.is_active %}当前在住{% else %}已结束{% endif %}</td>
+              <td class="row-actions">
+                <a href="{% url 'person_stay_edit' person.id stay.id %}">修改</a>
+                {% if stay.is_active %}
+                  <form method="post" action="{% url 'person_stay_remove' person.id stay.id %}" class="inline-form">
+                    {% csrf_token %}
+                    <button class="link-button" type="submit">结束</button>
+                  </form>
+                {% endif %}
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="5" class="empty">暂无入住记录</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="section-title"><h2>相关流水</h2></div>
+  {% include "core/partials/ledger_table.html" with ledger_rows=ledger_rows %}
+</section>
+
+<section class="panel danger-zone">
+  <div class="section-title"><h2>危险操作</h2></div>
+  <form method="post" action="{% url 'person_delete' person.id %}">
+    {% csrf_token %}
+    <button class="button ghost danger" type="submit">删除人员</button>
+  </form>
+</section>
+{% endblock %}

@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}首页 - 悦山公寓运营{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <h1>今日待办</h1>
+    <p>{{ today|date:"Y-m-d" }}</p>
+  </div>
+  <div class="actions">
+    <a class="button primary" href="{% url 'sign_contract' %}">签约</a>
+    <a class="button" href="{% url 'payment_create' %}">收付款</a>
+    <a class="button" href="{% url 'person_create' %}">新增人员</a>
+  </div>
+</section>
+
+<section class="metric-grid">
+  <article class="metric"><span>房间</span><strong>{{ stats.rooms }}</strong></article>
+  <article class="metric"><span>空房</span><strong>{{ stats.vacant }}</strong></article>
+  <article class="metric"><span>即将到期</span><strong>{{ stats.expiring }}</strong></article>
+  <article class="metric"><span>在租合同</span><strong>{{ stats.active_tenancies }}</strong></article>
+  <article class="metric"><span>待收</span><strong>¥{{ stats.open_income }}</strong></article>
+  <article class="metric"><span>待付</span><strong>¥{{ stats.open_expense }}</strong></article>
+</section>
+
+<section class="toolbar-band">
+  <form method="post" action="{% url 'generate_charges' %}">
+    {% csrf_token %}
+    <button class="button primary" type="submit">刷新账单</button>
+  </form>
+  <a class="button" href="{% url 'export_agent_rooms' %}">导出中介房态</a>
+  <a class="button" href="{% url 'export_police' %}">导出警务报备</a>
+  <a class="button" href="{% url 'export_import_template' %}">下载导入模板</a>
+  <a class="button" href="{% url 'import_workbook' %}">导入表格</a>
+  <a class="button" href="{% url 'charge_create' %}">新增账单</a>
+</section>
+
+<section class="split">
+  <div class="panel">
+    <div class="section-title">
+      <h2>逾期待处理</h2>
+      <a href="{% url 'charge_list' %}">全部</a>
+    </div>
+    {% include "core/partials/charge_table.html" with charges=overdue_charges compact=True %}
+  </div>
+  <div class="panel">
+    <div class="section-title">
+      <h2>7日内到期</h2>
+      <a href="{% url 'charge_list' %}">全部</a>
+    </div>
+    {% include "core/partials/charge_table.html" with charges=due_soon_charges compact=True %}
+  </div>
+</section>
+
+<section class="panel">
+  <div class="section-title">
+    <h2>最近收付款</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>日期</th><th>方向</th><th>金额</th><th>对象</th><th>已处理</th><th>备注</th><th>操作</th></tr></thead>
+      <tbody>
+        {% for payment in recent_payments %}
+          <tr>
+            <td>{{ payment.date|date:"Y-m-d" }}</td>
+            <td>{{ payment.get_direction_display }}</td>
+            <td>¥{{ payment.amount }}</td>
+            <td>{% if payment.room %}{{ payment.room.number }}{% endif %} {{ payment.person.name }}</td>
+            <td>¥{{ payment.allocated_amount }}</td>
+            <td>{{ payment.memo }}</td>
+            <td><a href="{% url 'payment_edit' payment.id %}">修改</a></td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="7" class="empty">暂无记录</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,48 @@
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>日期</th>
+        <th>方向</th>
+        <th>类别</th>
+        <th>账期</th>
+        <th>对象</th>
+        <th>金额</th>
+        <th>剩余</th>
+        {% if not compact %}<th>状态</th><th>说明</th><th>操作</th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for charge in charges %}
+        <tr class="{% if charge.balance > 0 %}charge-open{% else %}charge-paid{% endif %}">
+          <td>{{ charge.due_date|date:"Y-m-d" }}</td>
+          <td>{{ charge.get_direction_display }}</td>
+          <td>{{ charge.get_category_display }}</td>
+          <td>
+            {% if charge.period_start %}
+              {{ charge.period_start|date:"Y-m-d" }}{% if charge.period_end %} 至 {{ charge.period_end|date:"Y-m-d" }}{% endif %}
+            {% else %}
+              -
+            {% endif %}
+          </td>
+          <td>{% if charge.room %}{{ charge.room.number }}{% endif %} {{ charge.person.name }}</td>
+          <td>¥{{ charge.amount }}</td>
+          <td class="{% if charge.balance > 0 %}amount-warn{% endif %}">¥{{ charge.balance }}</td>
+          {% if not compact %}
+            <td>{{ charge.get_status_display }}</td>
+            <td>{{ charge.description }}</td>
+            <td class="row-actions">
+              <a href="{% url 'charge_edit' charge.id %}">修改</a>
+              <form method="post" action="{% url 'charge_delete' charge.id %}" class="inline-form">
+                {% csrf_token %}
+                <button class="link-button" type="submit">删除</button>
+              </form>
+            </td>
+          {% endif %}
+        </tr>
+      {% empty %}
+        <tr><td colspan="{% if compact %}7{% else %}10{% endif %}" class="empty">暂无账单</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

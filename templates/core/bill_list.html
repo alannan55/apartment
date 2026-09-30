@@ -1,0 +1,180 @@
+{% extends "base.html" %}
+{% block title %}账单 - 悦山公寓运营{% endblock %}
+{% block content %}
+<section class="page-head bill-page-head">
+  <div>
+    <h1>账单</h1>
+    <p>
+      {% if direction == "income" %}
+        房租与取暖费按房间、月份合并展示，收款后自动进入流水。
+      {% else %}
+        只展示中介佣金、押金退款和产权方房租，付款后自动进入流水。
+      {% endif %}
+    </p>
+  </div>
+  <div class="actions">
+    <a class="button" href="{% url 'property_rent_rule_list' %}">产权方房租配置</a>
+    <a class="button" href="{% url 'charge_create' %}">新增账单</a>
+  </div>
+</section>
+
+<nav class="bill-module-tabs" aria-label="账单方向">
+  <a class="{% if direction == 'income' %}active{% endif %}" href="{% url 'bill_list' %}?direction=income&scope={{ scope }}&status={{ status }}&month={{ month_value }}">
+    待收账单
+  </a>
+  <a class="{% if direction == 'expense' %}active{% endif %}" href="{% url 'bill_list' %}?direction=expense&scope={{ scope }}&status={{ status }}&month={{ month_value }}">
+    待付账单
+  </a>
+</nav>
+
+<section class="bill-summary-band">
+  <div class="bill-summary-item">
+    <span>{% if direction == "income" %}应收合计{% else %}应付合计{% endif %}</span>
+    <strong>¥{{ total_amount }}</strong>
+  </div>
+  <div class="bill-summary-item bill-summary-alert">
+    <span>未结金额</span>
+    <strong>¥{{ total_balance }}</strong>
+  </div>
+  <div class="bill-summary-item">
+    <span>待处理</span>
+    <strong>{{ open_count }} 笔</strong>
+  </div>
+  <div class="bill-summary-item bill-summary-paid">
+    <span>已结清</span>
+    <strong>{{ paid_count }} 笔</strong>
+  </div>
+</section>
+
+<section class="bill-toolbar">
+  <div class="bill-scope-tabs">
+    <a class="{% if scope == 'month' %}active{% endif %}" href="{% url 'bill_list' %}?direction={{ direction }}&scope=month&status={{ status }}&month={{ month_value }}">月度账单</a>
+    <a class="{% if scope == 'all' %}active{% endif %}" href="{% url 'bill_list' %}?direction={{ direction }}&scope=all&status={{ status }}&month={{ month_value }}">全部账单</a>
+  </div>
+
+  <form method="get" class="bill-filter-form">
+    <input type="hidden" name="direction" value="{{ direction }}">
+    <input type="hidden" name="scope" value="{{ scope }}">
+    <label class="compact-field">
+      <span>月份</span>
+      <input class="input" type="month" name="month" value="{{ month_value }}" {% if scope == "all" %}disabled{% endif %}>
+    </label>
+    <label class="compact-field">
+      <span>状态</span>
+      <select class="input" name="status">
+        <option value="all" {% if status == "all" %}selected{% endif %}>全部</option>
+        <option value="open" {% if status == "open" %}selected{% endif %}>待处理</option>
+        <option value="paid" {% if status == "paid" %}selected{% endif %}>已结清</option>
+      </select>
+    </label>
+    <button class="button primary" type="submit">筛选</button>
+  </form>
+</section>
+
+{% if direction == "income" %}
+  <form id="bill-bulk-form" method="post" action="{% url 'bill_bulk_settle' %}" class="bill-bulk-bar">
+    {% csrf_token %}
+    <span>勾选多户账单后，可分别生成流水并一次性全额结清。</span>
+    <button class="button primary" type="submit">批量全额收款</button>
+  </form>
+{% endif %}
+
+<section class="bill-list" aria-label="{% if direction == 'income' %}待收账单{% else %}待付账单{% endif %}">
+  {% for row in bill_rows %}
+    <article class="bill-row bill-row-{{ row.status }}">
+      <div class="bill-row-state">
+        {% if direction == "income" and row.balance > 0 %}
+          <label class="bill-select">
+            <input type="checkbox" name="bill_groups" value="{{ row.charge_ids|join:',' }}" form="bill-bulk-form">
+            <span>选择</span>
+          </label>
+        {% endif %}
+        <strong>{{ row.status_label }}</strong>
+        <span>{{ row.bill_month|date:"Y年m月" }}</span>
+        {% if row.balance > 0 %}
+          <b>未结 ¥{{ row.balance }}</b>
+        {% else %}
+          <b>已全部处理</b>
+        {% endif %}
+      </div>
+
+      <div class="bill-row-room">
+        {% if row.room %}
+          <a href="{% url 'room_detail' row.room.id %}">{{ row.room.number }}</a>
+        {% else %}
+          <strong>公共账务</strong>
+        {% endif %}
+        <span>{% if row.person %}{{ row.person.name }}{% else %}无关联人员{% endif %}</span>
+        {% if direction == "income" %}
+          <small>累计欠款 ¥{{ row.cumulative_due }}</small>
+        {% elif row.due_date %}
+          <small>应付日期 {{ row.due_date|date:"Y-m-d" }}</small>
+        {% endif %}
+      </div>
+
+      <div class="bill-row-detail">
+        {% if direction == "income" %}
+          {% for component in row.components %}
+            <div class="bill-component">
+              <strong>{{ component.label }}</strong>
+              <span>
+                {% if component.period_start %}
+                  {{ component.period_start|date:"m-d" }} 至 {{ component.period_end|date:"m-d" }}
+                {% endif %}
+              </span>
+              <span>应收 ¥{{ component.amount }}</span>
+              <span>已收 ¥{{ component.paid_amount }}</span>
+              {% if component.balance > 0 %}<b>未结 ¥{{ component.balance }}</b>{% endif %}
+            </div>
+          {% endfor %}
+        {% else %}
+          <div class="bill-component">
+            <strong>{{ row.category_label }}</strong>
+            <span>{{ row.description }}</span>
+            <span>应付 ¥{{ row.amount }}</span>
+            <span>已付 ¥{{ row.paid_amount }}</span>
+            {% if row.balance > 0 %}<b>未结 ¥{{ row.balance }}</b>{% endif %}
+          </div>
+        {% endif %}
+      </div>
+
+      <div class="bill-row-total">
+        <span>{% if direction == "income" %}本期应收{% else %}本笔应付{% endif %}</span>
+        <strong>¥{{ row.amount }}</strong>
+        <small>{% if direction == "income" %}已收{% else %}已付{% endif %} ¥{{ row.paid_amount }}</small>
+      </div>
+
+      <div class="bill-row-actions">
+        {% if row.balance > 0 %}
+          <form method="post" action="{% url 'bill_settle' %}" class="bill-full-form">
+            {% csrf_token %}
+            {% for charge_id in row.charge_ids %}<input type="hidden" name="charge_ids" value="{{ charge_id }}">{% endfor %}
+            <button class="button primary" type="submit">{% if direction == "income" %}全额收{% else %}全额付{% endif %}</button>
+          </form>
+          <form method="post" action="{% url 'bill_settle' %}" class="bill-partial-form">
+            {% csrf_token %}
+            {% for charge_id in row.charge_ids %}<input type="hidden" name="charge_ids" value="{{ charge_id }}">{% endfor %}
+            <input class="input" type="number" name="amount" min="0.01" max="{{ row.balance }}" step="0.01" placeholder="部分金额">
+            <button class="button" type="submit">{% if direction == "income" %}部分收{% else %}部分付{% endif %}</button>
+          </form>
+        {% else %}
+          <span class="bill-settled-label">已结清</span>
+        {% endif %}
+        {% if row.latest_payment %}
+          <div class="bill-correction-actions">
+            <a href="{% url 'bill_payment_edit' row.latest_payment.id %}">修改最近一笔</a>
+            <form method="post" action="{% url 'payment_delete' row.latest_payment.id %}" class="inline-form">
+              {% csrf_token %}
+              <button class="link-button danger" type="submit">撤销最近一笔</button>
+            </form>
+          </div>
+        {% endif %}
+      </div>
+    </article>
+  {% empty %}
+    <div class="panel empty">
+      {% if status == "paid" %}暂无已结清账单{% elif status == "open" %}暂无待处理账单{% else %}暂无账单{% endif %}
+    </div>
+  {% endfor %}
+</section>
+{% endblock %}

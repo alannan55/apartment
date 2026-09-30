@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}产权方房租配置 - 悦山公寓运营{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <h1>产权方房租配置</h1>
+    <p>配置固定付款周期后，系统会自动生成产权方房租待付账单。</p>
+  </div>
+  <div class="actions">
+    <a class="button" href="{% url 'bill_list' %}?direction=expense">返回待付账单</a>
+    <a class="button primary" href="{% url 'property_rent_rule_create' %}">新增规则</a>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>名称</th>
+          <th>金额</th>
+          <th>周期</th>
+          <th>付款日</th>
+          <th>起止日期</th>
+          <th>状态</th>
+          <th>备注</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for rule in rules %}
+          <tr>
+            <td><strong>{{ rule.name }}</strong></td>
+            <td>¥{{ rule.amount }}</td>
+            <td>{{ rule.get_frequency_display }}</td>
+            <td>每期 {{ rule.day_of_month }} 日</td>
+            <td>{{ rule.start_date|date:"Y-m-d" }}{% if rule.end_date %} 至 {{ rule.end_date|date:"Y-m-d" }}{% endif %}</td>
+            <td>{% if rule.active %}<span class="amount-good">启用</span>{% else %}停用{% endif %}</td>
+            <td>{{ rule.notes|default:"-" }}</td>
+            <td class="row-actions">
+              <a href="{% url 'property_rent_rule_edit' rule.id %}">修改</a>
+              <form method="post" action="{% url 'property_rent_rule_delete' rule.id %}" class="inline-form">
+                {% csrf_token %}
+                <button class="link-button danger" type="submit">删除</button>
+              </form>
+            </td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="8" class="empty">尚未配置产权方房租规则</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

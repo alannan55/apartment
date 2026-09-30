@@ -1,0 +1,33 @@
+{% load static %}
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}悦山公寓运营{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'core/app.css' %}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{% url 'dashboard' %}">悦山运营</a>
+    <nav class="nav">
+      <a href="{% url 'dashboard' %}">首页</a>
+      <a href="{% url 'room_list' %}">房间</a>
+      <a href="{% url 'tenancy_list' %}">合同</a>
+      <a href="{% url 'bill_list' %}">账单</a>
+      <a href="{% url 'charge_list' %}">流水</a>
+      <a href="{% url 'person_list' %}">人员</a>
+    </nav>
+  </header>
+  <main class="page">
+    {% if messages %}
+      <div class="messages">
+        {% for message in messages %}
+          <div class="message {{ message.tags }}">{{ message }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

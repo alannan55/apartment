@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} - 悦山公寓运营{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <h1>{{ title }}</h1>
+  </div>
+</section>
+<form method="post" class="form-panel" {% if form.is_multipart %}enctype="multipart/form-data"{% endif %}>
+  {% csrf_token %}
+  {% if form.non_field_errors %}
+    <div class="form-errors">{{ form.non_field_errors }}</div>
+  {% endif %}
+  <div class="form-grid">
+    {% for field in form %}
+      <label class="field {% if field.field.widget.input_type == 'textarea' %}field-wide{% endif %}">
+        <span>{{ field.label }}</span>
+        {{ field }}
+        {% if field.errors %}<small class="field-error">{{ field.errors|striptags }}</small>{% endif %}
+      </label>
+    {% endfor %}
+  </div>
+  <div class="form-actions">
+    <button class="button primary" type="submit">{{ submit_label }}</button>
+    <a class="button ghost" href="{% url 'dashboard' %}">返回</a>
+  </div>
+</form>
+{% endblock %}

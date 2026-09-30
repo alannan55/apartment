@@ -1,0 +1,61 @@
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>日期</th>
+        <th>类型</th>
+        <th>方向</th>
+        <th>类别</th>
+        <th>账期</th>
+        <th>房间/人员</th>
+        <th>金额</th>
+        <th>剩余/预收</th>
+        <th>状态</th>
+        <th>说明</th>
+        <th>操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in ledger_rows %}
+        <tr class="{% if row.open %}charge-open{% else %}charge-paid{% endif %}">
+          <td>{{ row.date|date:"Y-m-d" }}</td>
+          <td>{% if row.kind == "payment" %}流水{% else %}账单{% endif %}</td>
+          <td>{{ row.direction }}</td>
+          <td>{{ row.category }}</td>
+          <td>
+            {% if row.period_start %}
+              {{ row.period_start|date:"Y-m-d" }}{% if row.period_end %} 至 {{ row.period_end|date:"Y-m-d" }}{% endif %}
+            {% else %}
+              -
+            {% endif %}
+          </td>
+          <td>
+            {% if row.room %}<a href="{% url 'room_detail' row.room.id %}">{{ row.room.number }}</a>{% endif %}
+            {% if row.person %} {{ row.person.name }}{% endif %}
+          </td>
+          <td>¥{{ row.amount }}</td>
+          <td>¥{{ row.balance }}</td>
+          <td>{{ row.status }}</td>
+          <td>{{ row.description }}</td>
+          <td class="row-actions">
+            {% if row.kind == "payment" %}
+              <a href="{% url 'payment_edit' row.obj.id %}">修改</a>
+              <form method="post" action="{% url 'payment_delete' row.obj.id %}" class="inline-form">
+                {% csrf_token %}
+                <button class="link-button" type="submit">删除</button>
+              </form>
+            {% else %}
+              <a href="{% url 'charge_edit' row.obj.id %}">修改</a>
+              <form method="post" action="{% url 'charge_delete' row.obj.id %}" class="inline-form">
+                {% csrf_token %}
+                <button class="link-button" type="submit">删除</button>
+              </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="11" class="empty">暂无流水</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

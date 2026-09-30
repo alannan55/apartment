@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}人员 - 悦山公寓运营{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div><h1>人员</h1></div>
+  <div class="actions">
+    <a class="button primary" href="{% url 'person_create' %}">新增人员</a>
+    <a class="button" href="{% url 'export_police' %}">导出警务报备</a>
+  </div>
+</section>
+<section class="panel">
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>房间</th><th>类型</th><th>姓名</th><th>身份证</th><th>电话</th><th>紧急联系人</th><th>联系电话</th><th>操作</th></tr></thead>
+      <tbody>
+        {% for row in person_rows %}
+          {% with person=row.person %}
+          <tr>
+            <td>{{ row.rooms|default:"-" }}</td>
+            <td>{{ row.types|default:"-" }}</td>
+            <td><a href="{% url 'person_detail' person.id %}"><strong>{{ person.name }}</strong></a></td>
+            <td class="mono">{{ person.id_number }}</td>
+            <td>{{ person.phone }}</td>
+            <td>{{ person.emergency_name }}</td>
+            <td>{{ person.emergency_phone }}</td>
+            <td class="row-actions">
+              <a href="{% url 'person_detail' person.id %}">查看</a>
+              <a href="{% url 'person_edit' person.id %}">修改</a>
+              <form method="post" action="{% url 'person_delete' person.id %}" class="inline-form">
+                {% csrf_token %}
+                <button class="link-button" type="submit">删除</button>
+              </form>
+            </td>
+          </tr>
+          {% endwith %}
+        {% empty %}
+          <tr><td colspan="8" class="empty">暂无人员</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

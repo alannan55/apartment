@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}房间 - 悦山公寓运营{% endblock %}
+{% block content %}
+<section class="page-head room-page-head">
+  <div>
+    <h1>房间总览</h1>
+    <p>共 {{ room_rows|length }} 间，按房间号排列。房态、住户和账务集中展示。</p>
+  </div>
+  <div class="actions">
+    <a class="button primary" href="{% url 'room_create' %}">新增房间</a>
+    <a class="button" href="{% url 'export_agent_rooms' %}">导出中介房态</a>
+    <a class="button" href="{% url 'export_import_template' %}">下载导入模板</a>
+    <a class="button" href="{% url 'import_workbook' %}">导入表格</a>
+  </div>
+</section>
+
+<section class="room-summary" aria-label="房间概况">
+  <div class="room-status-summary">
+    {% for item in status_summaries %}
+      {% if item.count %}
+        <span class="room-summary-item">
+          <i class="room-status-dot room-status-dot-{{ item.value }}"></i>
+          {{ item.label }} <strong>{{ item.count }}</strong>
+        </span>
+      {% endif %}
+    {% endfor %}
+  </div>
+  <div class="room-money-summary">
+    <span>住户欠款 <strong class="{% if total_due > 0 %}amount-warn{% endif %}">¥{{ total_due }}</strong></span>
+    <span>预收 <strong class="{% if total_prepaid > 0 %}amount-good{% endif %}">¥{{ total_prepaid }}</strong></span>
+  </div>
+</section>
+
+<section class="room-grid" aria-label="房间列表">
+  {% for row in room_rows %}
+    {% with room=row.room finance=row.finance tenancy=row.tenancy people=row.people %}
+      <article class="room-card room-card-{{ room.status }}">
+        <header class="room-card-head">
+          <div>
+            <a class="room-number" href="{% url 'room_detail' room.id %}">{{ room.number }}</a>
+            <span class="status status-{{ room.status }}">{{ room.get_status_display }}</span>
+          </div>
+          <strong class="room-price">
+            {% if room.listing_price %}¥{{ room.listing_price }}{% else %}未定价{% endif %}
+          </strong>
+        </header>
+
+        <div class="room-facts">
+          <span>{{ room.floor }}</span>
+          {% if room.area %}<span>{{ room.area }}㎡</span>{% endif %}
+          {% if room.orientation %}<span>{{ room.orientation }}</span>{% endif %}
+          {% if room.status == "vacant" and room.room_password %}<span>密码 {{ room.room_password }}</span>{% endif %}
+        </div>
+
+        <div class="room-occupancy">
+          {% if tenancy %}
+            <div class="room-primary-person">
+              <span>主租客</span>
+              <a href="{% url 'person_detail' tenancy.primary_person.id %}">{{ tenancy.primary_person.name }}</a>
+              <strong>¥{{ tenancy.monthly_rent }}/月</strong>
+            </div>
+            <div class="room-contract-date">
+              {% if tenancy.planned_move_out_date %}
+                <span class="date-alert">预计退租 {{ tenancy.planned_move_out_date|date:"Y-m-d" }}</span>
+              {% else %}
+                <span>合同至 {{ tenancy.end_date|date:"Y-m-d" }}</span>
+              {% endif %}
+            </div>
+          {% elif people %}
+            <div class="room-primary-person">
+              <span>当前人员</span>
+              <strong>
+                {% for stay in people %}{{ stay.person.name }}{% if not forloop.last %}、{% endif %}{% endfor %}
+              </strong>
+            </div>
+            <div class="room-contract-date"><span>无关联合同</span></div>
+          {% else %}
+            <div class="room-vacant-copy">
+              <strong>{% if room.status == "vacant" %}当前可签约{% else %}暂无在住人员{% endif %}</strong>
+              <span>可进入房间详情维护信息</span>
+            </div>
+          {% endif %}
+          {% if people and tenancy %}
+            <div class="room-residents">
+              <span>在住</span>
+              {% for stay in people %}{{ stay.person.name }}{% if not forloop.last %}、{% endif %}{% endfor %}
+            </div>
+          {% endif %}
+        </div>
+
+        <div class="room-finance {% if finance.tenant_due > 0 or finance.expense_due > 0 %}room-finance-alert{% endif %}">
+          <div class="room-finance-main">
+            {% if finance.tenant_due > 0 %}
+              <span>住户欠款</span>
+              <strong>¥{{ finance.tenant_due }}</strong>
+            {% else %}
+              <span>住户账务</span>
+              <strong class="amount-good">正常</strong>
+            {% endif %}
+          </div>
+          <div class="room-finance-detail">
+            {% if finance.rent_due > 0 %}<span>租金 ¥{{ finance.rent_due }}</span>{% endif %}
+            {% if finance.deposit_due > 0 %}<span>押金 ¥{{ finance.deposit_due }}</span>{% endif %}
+            {% if finance.heating_due > 0 %}<span>取暖 ¥{{ finance.heating_due }}</span>{% endif %}
+            {% if finance.other_due > 0 %}<span>其它 ¥{{ finance.other_due }}</span>{% endif %}
+            {% if finance.prepaid > 0 %}<span class="amount-good">预收 ¥{{ finance.prepaid }}</span>{% endif %}
+            {% if finance.expense_due > 0 %}<span class="amount-warn">待付 ¥{{ finance.expense_due }}</span>{% endif %}
+            {% if finance.tenant_due == 0 and finance.prepaid == 0 and finance.expense_due == 0 %}<span>暂无待处理款项</span>{% endif %}
+          </div>
+        </div>
+
+        <footer class="room-card-actions">
+          <a href="{% url 'room_detail' room.id %}">详情</a>
+          <a href="{% url 'room_edit' room.id %}">修改</a>
+          <a href="{% url 'person_create' %}?room={{ room.id }}">人员</a>
+          <a href="{% url 'payment_create' %}?room={{ room.id }}">收付款</a>
+        </footer>
+      </article>
+    {% endwith %}
+  {% empty %}
+    <div class="panel empty room-empty">暂无房间</div>
+  {% endfor %}
+</section>
+{% endblock %}

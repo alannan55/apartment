@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% block title %}{{ room.number }} - 悦山公寓运营{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <h1>{{ room.number }}</h1>
+    <p>{{ room.get_status_display }} · {{ room.orientation }} · {{ room.floor }}</p>
+  </div>
+  <div class="actions">
+    <a class="button" href="{% url 'room_edit' room.id %}">修改房间</a>
+    {% if room.status == "vacant" %}
+      <a class="button primary" href="{% url 'room_contract_create' room.id %}">签约</a>
+    {% endif %}
+    <a class="button" href="{% url 'payment_create' %}?room={{ room.id }}">收付款</a>
+    <a class="button" href="{% url 'charge_create' %}?room={{ room.id }}">新增账单</a>
+    <a class="button" href="{% url 'person_create' %}?room={{ room.id }}">添加人员</a>
+    {% if active_tenancy %}
+      <a class="button" href="{% url 'move_tenancy' active_tenancy.id %}">换房</a>
+      <a class="button" href="{% url 'checkout_tenancy' active_tenancy.id %}">退租</a>
+    {% endif %}
+  </div>
+</section>
+
+<section class="metric-grid">
+  <article class="metric"><span>挂牌价</span><strong>{% if room.listing_price %}¥{{ room.listing_price }}{% else %}-{% endif %}</strong></article>
+  <article class="metric"><span>佣金基数</span><strong>¥{{ room.commission_base }}</strong></article>
+  <article class="metric"><span>应交合计</span><strong>¥{{ charge_total }}</strong></article>
+  <article class="metric"><span>已交合计</span><strong>¥{{ payment_total }}</strong></article>
+  <article class="metric"><span>待付余额</span><strong>¥{{ balance }}</strong></article>
+  <article class="metric"><span>房间密码</span><strong>{{ room.room_password|default:"-" }}</strong></article>
+</section>
+
+<section class="split">
+  <div class="panel">
+    <div class="section-title"><h2>合同</h2></div>
+    {% if active_tenancy %}
+      <div class="row-actions section-actions">
+        <a href="{% url 'tenancy_edit' active_tenancy.id %}">修改合同</a>
+        <form method="post" action="{% url 'tenancy_delete' active_tenancy.id %}" class="inline-form">
+          {% csrf_token %}
+          <button type="submit" class="link-button">删除合同</button>
+        </form>
+      </div>
+      <dl class="detail-list">
+        <dt>租客</dt><dd><a href="{% url 'person_detail' active_tenancy.primary_person.id %}">{{ active_tenancy.primary_person.name }}</a></dd>
+        <dt>租期</dt><dd>{{ active_tenancy.start_date|date:"Y-m-d" }} 至 {{ active_tenancy.end_date|date:"Y-m-d" }}</dd>
+        <dt>预计退租</dt><dd>{{ active_tenancy.checkout_plan_text|default:"-" }}</dd>
+        <dt>月租</dt><dd>¥{{ active_tenancy.monthly_rent }}</dd>
+        <dt>押金</dt><dd>¥{{ active_tenancy.deposit_amount }}</dd>
+        <dt>中介</dt><dd>{{ active_tenancy.broker|default:"-" }}</dd>
+      </dl>
+    {% elif latest_tenancy %}
+      <p class="empty">最近合同已结束：{{ latest_tenancy.primary_person.name }}，{{ latest_tenancy.end_date|date:"Y-m-d" }}。</p>
+    {% else %}
+      <p class="empty">暂无合同</p>
+    {% endif %}
+    {% if room.qr_code_image %}
+      <div class="qr-block">
+        <span>自主申报二维码</span>
+        <img src="{{ room.qr_code_image.url }}" alt="{{ room.number }} 自主申报二维码">
+      </div>
+    {% endif %}
+  </div>
+  <div class="panel">
+    <div class="section-title"><h2>当前人员</h2></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>姓名</th><th>类型</th><th>电话</th><th>起止</th><th>操作</th></tr></thead>
+        <tbody>
+          {% for stay in active_stays %}
+            <tr>
+              <td><a href="{% url 'person_detail' stay.person.id %}">{{ stay.person.name }}</a></td>
+              <td>{{ stay.get_stay_type_display }}</td>
+              <td>{{ stay.person.phone }}</td>
+              <td>{{ stay.start_date|date:"Y-m-d" }}{% if stay.end_date %} 至 {{ stay.end_date|date:"Y-m-d" }}{% endif %}</td>
+              <td class="row-actions">
+                <a href="{% url 'room_person_edit' room.id stay.id %}">修改</a>
+                <form method="post" action="{% url 'room_person_remove' room.id stay.id %}" class="inline-form">
+                  {% csrf_token %}
+                  <button type="submit" class="link-button">移除</button>
+                </form>
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="5" class="empty">暂无当前人员</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+{% if collection_charges %}
+<section class="panel">
+  <div class="section-title">
+    <h2>本期待收</h2>
+    <a href="{% url 'bill_list' %}">账单</a>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>款项</th><th>周期</th><th>应收</th><th>已收</th><th>待收</th><th>操作</th></tr></thead>
+      <tbody>
+        {% for charge in collection_charges %}
+          <tr class="charge-open">
+            <td>{{ charge.get_category_display }}</td>
+            <td>
+              {% if charge.period_start %}
+                {{ charge.period_start|date:"Y-m-d" }}{% if charge.period_end %} 至 {{ charge.period_end|date:"Y-m-d" }}{% endif %}
+              {% else %}
+                {{ charge.due_date|date:"Y-m-d" }}
+              {% endif %}
+            </td>
+            <td>¥{{ charge.amount }}</td>
+            <td>¥{{ charge.allocated_amount }}</td>
+            <td>¥{{ charge.balance }}</td>
+            <td class="row-actions collection-actions">
+              <form method="post" action="{% url 'collection_collect' charge.id %}" class="inline-form">
+                {% csrf_token %}
+                <button class="link-button" type="submit">全额收</button>
+              </form>
+              <form method="post" action="{% url 'collection_collect' charge.id %}" class="inline-form partial-form">
+                {% csrf_token %}
+                <input class="input inline-amount" type="number" name="amount" min="0.01" max="{{ charge.balance }}" step="0.01" placeholder="金额">
+                <button class="link-button" type="submit">部分收</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+<section class="panel">
+  <div class="section-title">
+    <h2>流水明细</h2>
+    <a href="{% url 'charge_create' %}?room={{ room.id }}">新增账单</a>
+  </div>
+  {% include "core/partials/ledger_table.html" with ledger_rows=ledger_rows %}
+</section>
+
+<section class="panel">
+  <div class="section-title"><h2>最近收付款</h2></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>日期</th><th>方向</th><th>金额</th><th>已处理</th><th>备注</th><th>操作</th></tr></thead>
+      <tbody>
+        {% for payment in recent_payments %}
+          <tr>
+            <td>{{ payment.date|date:"Y-m-d" }}</td>
+            <td>{{ payment.get_direction_display }}</td>
+            <td>¥{{ payment.amount }}</td>
+            <td>¥{{ payment.allocated_amount }}</td>
+            <td>{{ payment.memo }}</td>
+            <td class="row-actions">
+              <a href="{% url 'payment_edit' payment.id %}">修改</a>
+              <form method="post" action="{% url 'payment_delete' payment.id %}" class="inline-form">
+                {% csrf_token %}
+                <button class="link-button" type="submit">删除</button>
+              </form>
+            </td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="6" class="empty">暂无收付款</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel danger-zone">
+  <div class="section-title">
+    <h2>危险操作</h2>
+  </div>
+  <form method="post" action="{% url 'room_delete' room.id %}">
+    {% csrf_token %}
+    <button class="button ghost danger" type="submit">删除房间</button>
+  </form>
+</section>
+{% endblock %}

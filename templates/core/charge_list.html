@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}流水 - 悦山公寓运营{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div><h1>流水</h1></div>
+  <div class="actions">
+    <a class="button" href="{% url 'payment_create' %}">记录收付款</a>
+    <a class="button" href="{% url 'charge_create' %}">新增账单</a>
+  </div>
+</section>
+<nav class="tabs">
+  <a class="{% if status == 'all' or status == '' %}active{% endif %}" href="{% url 'charge_list' %}?status=all">全部</a>
+  <a class="{% if status == 'open' %}active{% endif %}" href="{% url 'charge_list' %}?status=open">待处理</a>
+  <a class="{% if status == 'paid' %}active{% endif %}" href="{% url 'charge_list' %}?status=paid">已结清</a>
+  <a class="{% if status == 'payments' %}active{% endif %}" href="{% url 'charge_list' %}?status=payments">收付款</a>
+</nav>
+<section class="panel">
+  {% include "core/partials/ledger_table.html" with ledger_rows=ledger_rows %}
+</section>
+{% endblock %}

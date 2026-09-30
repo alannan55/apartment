@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}{{ tenancy.room.number }} 退租 - 悦山公寓运营{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <h1>{{ tenancy.room.number }} 退租</h1>
+    <p>{{ tenancy.primary_person.name }} · 合同 {{ tenancy.start_date|date:"Y-m-d" }} 至 {{ tenancy.end_date|date:"Y-m-d" }}</p>
+  </div>
+  <div class="actions">
+    <a class="button" href="{% url 'room_detail' tenancy.room.id %}">返回房间</a>
+  </div>
+</section>
+
+{% if tenancy.planned_move_out_date %}
+  <section class="panel notice-panel">
+    <div class="section-title">
+      <h2>当前预计退租</h2>
+    </div>
+    <dl class="detail-list">
+      <dt>预计日期</dt><dd>{{ tenancy.planned_move_out_date|date:"Y-m-d" }}</dd>
+      <dt>押金待付</dt><dd>¥{{ tenancy.planned_deposit_refund_amount|default:"0.00" }}</dd>
+      <dt>备注</dt><dd>{{ tenancy.planned_move_out_note|default:"-" }}</dd>
+    </dl>
+  </section>
+{% endif %}
+
+<section class="split">
+  <form method="post" class="form-panel">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="plan">
+    <div class="section-title"><h2>保存预计退租</h2></div>
+    {% if plan_form.non_field_errors %}
+      <div class="form-errors">{{ plan_form.non_field_errors }}</div>
+    {% endif %}
+    <div class="form-grid">
+      {% for field in plan_form %}
+        <label class="field {% if field.field.widget.input_type == 'textarea' %}field-wide{% endif %}">
+          <span>{{ field.label }}</span>
+          {{ field }}
+          {% if field.errors %}<small class="field-error">{{ field.errors|striptags }}</small>{% endif %}
+        </label>
+      {% endfor %}
+    </div>
+    <div class="form-actions">
+      <button class="button primary" type="submit">保存预计退租</button>
+      {% if tenancy.planned_move_out_date %}
+        <button class="button ghost danger" type="submit" name="action" value="cancel_plan">取消预计退租</button>
+      {% endif %}
+    </div>
+  </form>
+
+  <form method="post" class="form-panel danger-zone">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="actual">
+    <div class="section-title"><h2>确认实际退租</h2></div>
+    {% if actual_form.non_field_errors %}
+      <div class="form-errors">{{ actual_form.non_field_errors }}</div>
+    {% endif %}
+    <div class="form-grid">
+      {% for field in actual_form %}
+        <label class="field {% if field.field.widget.input_type == 'textarea' %}field-wide{% endif %}">
+          <span>{{ field.label }}</span>
+          {{ field }}
+          {% if field.errors %}<small class="field-error">{{ field.errors|striptags }}</small>{% endif %}
+        </label>
+      {% endfor %}
+    </div>
+    <div class="form-actions">
+      <button class="button danger" type="submit">确认已经退租</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

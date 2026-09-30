@@ -1,0 +1,174 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} - 悦山公寓运营{% endblock %}
+{% block content %}
+<section class="page-head contract-page-head">
+  <div>
+    <h1>{{ title }}</h1>
+    <p>登记主租客、合同周期和费用，保存后自动生成押金、首期房租及相关待收待付。</p>
+  </div>
+</section>
+
+<form method="post" class="form-panel contract-form">
+  {% csrf_token %}
+  {% for hidden in form.hidden_fields %}{{ hidden }}{% endfor %}
+  {% if form.non_field_errors %}
+    <div class="form-errors contract-form-errors">{{ form.non_field_errors }}</div>
+  {% endif %}
+
+  <section class="contract-section">
+    <div class="contract-section-title">
+      <h2>房间</h2>
+      <p>只能选择当前空房</p>
+    </div>
+    <div class="contract-fields contract-fields-room">
+      {% if contract_room %}
+        <div class="contract-room-summary">
+          <strong>{{ contract_room.number }}</strong>
+          <span>{{ contract_room.floor }}{% if contract_room.orientation %} · {{ contract_room.orientation }}{% endif %}</span>
+          <span>{% if contract_room.listing_price %}挂牌 ¥{{ contract_room.listing_price }}{% else %}未设置挂牌价{% endif %}</span>
+        </div>
+      {% else %}
+        <label class="field">
+          <span>{{ form.room.label }}</span>
+          {{ form.room }}
+          {% if form.room.errors %}<small class="field-error">{{ form.room.errors|striptags }}</small>{% endif %}
+        </label>
+      {% endif %}
+    </div>
+  </section>
+
+  <section class="contract-section">
+    <div class="contract-section-title">
+      <h2>主租客</h2>
+      <p>警务报备所需基础信息</p>
+    </div>
+    <div class="contract-fields">
+      <label class="field">
+        <span>{{ form.person_name.label }}</span>
+        {{ form.person_name }}
+        {% if form.person_name.errors %}<small class="field-error">{{ form.person_name.errors|striptags }}</small>{% endif %}
+      </label>
+      <label class="field">
+        <span>{{ form.phone.label }}</span>
+        {{ form.phone }}
+        {% if form.phone.errors %}<small class="field-error">{{ form.phone.errors|striptags }}</small>{% endif %}
+      </label>
+      <label class="field">
+        <span>{{ form.id_number.label }}</span>
+        {{ form.id_number }}
+        {% if form.id_number.errors %}<small class="field-error">{{ form.id_number.errors|striptags }}</small>{% endif %}
+      </label>
+    </div>
+  </section>
+
+  <section class="contract-section">
+    <div class="contract-section-title">
+      <h2>紧急联系人</h2>
+      <p>常住人员联系信息</p>
+    </div>
+    <div class="contract-fields">
+      <label class="field">
+        <span>{{ form.emergency_name.label }}</span>
+        {{ form.emergency_name }}
+        {% if form.emergency_name.errors %}<small class="field-error">{{ form.emergency_name.errors|striptags }}</small>{% endif %}
+      </label>
+      <label class="field">
+        <span>{{ form.emergency_phone.label }}</span>
+        {{ form.emergency_phone }}
+        {% if form.emergency_phone.errors %}<small class="field-error">{{ form.emergency_phone.errors|striptags }}</small>{% endif %}
+      </label>
+      <label class="field">
+        <span>{{ form.emergency_address.label }}</span>
+        {{ form.emergency_address }}
+        {% if form.emergency_address.errors %}<small class="field-error">{{ form.emergency_address.errors|striptags }}</small>{% endif %}
+      </label>
+    </div>
+  </section>
+
+  <section class="contract-section">
+    <div class="contract-section-title">
+      <h2>合同周期</h2>
+      <p>如实填写实际租期</p>
+    </div>
+    <div class="contract-fields">
+      <label class="field">
+        <span>{{ form.start_date.label }}</span>
+        {{ form.start_date }}
+        {% if form.start_date.errors %}<small class="field-error">{{ form.start_date.errors|striptags }}</small>{% endif %}
+      </label>
+      <label class="field">
+        <span>{{ form.end_date.label }}</span>
+        {{ form.end_date }}
+        {% if form.end_date.errors %}<small class="field-error">{{ form.end_date.errors|striptags }}</small>{% endif %}
+      </label>
+      <label class="field">
+        <span>{{ form.payment_cycle.label }}</span>
+        {{ form.payment_cycle }}
+        {% if form.payment_cycle.errors %}<small class="field-error">{{ form.payment_cycle.errors|striptags }}</small>{% endif %}
+      </label>
+    </div>
+  </section>
+
+  <section class="contract-section">
+    <div class="contract-section-title">
+      <h2>租金与押金</h2>
+      <p>保存后自动进入待收</p>
+    </div>
+    <div class="contract-fields">
+      <label class="field">
+        <span>{{ form.monthly_rent.label }}</span>
+        {{ form.monthly_rent }}
+        {% if form.monthly_rent.errors %}<small class="field-error">{{ form.monthly_rent.errors|striptags }}</small>{% endif %}
+      </label>
+      <label class="field">
+        <span>{{ form.deposit_amount.label }}</span>
+        {{ form.deposit_amount }}
+        {% if form.deposit_amount.errors %}<small class="field-error">{{ form.deposit_amount.errors|striptags }}</small>{% endif %}
+      </label>
+      <label class="field">
+        <span>{{ form.first_month_discount.label }}</span>
+        {{ form.first_month_discount }}
+        {% if form.first_month_discount.errors %}<small class="field-error">{{ form.first_month_discount.errors|striptags }}</small>{% endif %}
+      </label>
+    </div>
+  </section>
+
+  <section class="contract-section">
+    <div class="contract-section-title">
+      <h2>中介佣金</h2>
+      <p>默认按房间佣金基数计算</p>
+    </div>
+    <div class="contract-fields contract-fields-two">
+      <label class="field">
+        <span>{{ form.broker_name.label }}</span>
+        {{ form.broker_name }}
+        {% if form.broker_name.errors %}<small class="field-error">{{ form.broker_name.errors|striptags }}</small>{% endif %}
+      </label>
+      <label class="field">
+        <span>{{ form.commission_manual_amount.label }}</span>
+        {{ form.commission_manual_amount }}
+        {% if form.commission_manual_amount.errors %}<small class="field-error">{{ form.commission_manual_amount.errors|striptags }}</small>{% endif %}
+      </label>
+    </div>
+  </section>
+
+  <section class="contract-section">
+    <div class="contract-section-title">
+      <h2>备注</h2>
+      <p>记录特殊约定或说明</p>
+    </div>
+    <div class="contract-fields">
+      <label class="field field-wide">
+        <span>{{ form.notes.label }}</span>
+        {{ form.notes }}
+        {% if form.notes.errors %}<small class="field-error">{{ form.notes.errors|striptags }}</small>{% endif %}
+      </label>
+    </div>
+  </section>
+
+  <div class="form-actions contract-form-actions">
+    <a class="button ghost" href="{% if contract_room %}{% url 'room_detail' contract_room.id %}{% else %}{% url 'room_list' %}{% endif %}">取消</a>
+    <button class="button primary" type="submit">{{ submit_label }}</button>
+  </div>
+</form>
+{% endblock %}
