@@ -2,10 +2,11 @@ from datetime import date as date_type, datetime
 from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
+from django.core.exceptions import ValidationError
 from django.utils import timezone
 from openpyxl import load_workbook
 
-from .models import Broker, Charge, Payment, Person, Room, Stay, Tenancy
+from .models import Broker, Charge, Payment, Person, PoliceReportExport, Room, Stay, Tenancy
 from .services import allocate_unallocated_payments, create_commission_charge, set_planned_checkout
 
 
@@ -181,6 +182,7 @@ def map_choice(value, choices, label, sheet, row_number, default=None):
 
 
 def clear_business_data():
+    PoliceReportExport.objects.all().delete()
     Payment.objects.all().delete()
     Charge.objects.all().delete()
     Stay.objects.all().delete()
@@ -358,9 +360,9 @@ def import_split_room_template(workbook, clear=False):
         if not person:
             continue
         counts["人员"] += 1
-        start_date = date_value(row[8]) or (tenancies_by_room.get(room.number).start_date if room.number in tenancies_by_room else today)
+        start_date = date_value(row[8])
         end_date = date_value(row[9])
-        tenancy = tenancies_by_room.get(room.number) or room.active_tenancy(start_date)
+        tenancy = tenancies_by_room.get(room.number) or room.active_tenancy()
         upsert_stay(
             person,
             room,
@@ -504,11 +506,11 @@ def import_room_summary(workbook, clear=False):
             counts["入住"] += 1
         for person in parse_person_list(row[34], "房间总表", row_number):
             counts["人员"] += 1
-            upsert_stay(person, room, Stay.Type.VISITOR, default_start, report_note="探望、暂住")
+            upsert_stay(person, room, Stay.Type.VISITOR, None, report_note="探望、暂住")
             counts["入住"] += 1
         for person in parse_person_list(row[35], "房间总表", row_number):
             counts["人员"] += 1
-            upsert_stay(person, room, Stay.Type.MANAGER, default_start, report_note="管理员")
+            upsert_stay(person, room, Stay.Type.MANAGER, None, report_note="管理员")
             counts["入住"] += 1
 
         due_date = billing_start or contract_start or today
@@ -556,11 +558,20 @@ def import_room_summary(workbook, clear=False):
 
 @transaction.atomic
 def import_template(file_obj, clear=False):
+    try:
+        return _import_template(file_obj, clear=clear)
+    except ValidationError as exc:
+        raise TemplateImportError("资料未导入：" + "；".join(exc.messages)) from exc
+
+
+def _import_template(file_obj, clear=False):
     workbook = load_workbook(file_obj, data_only=True)
     if "房间与合同" in workbook.sheetnames:
         return import_split_room_template(workbook, clear=clear)
     if "房间总表" in workbook.sheetnames:
         return import_room_summary(workbook, clear=clear)
+    if not set(workbook.sheetnames) & {"房间", "人员", "合同", "入住", "账单", "收付款"}:
+        raise TemplateImportError("无法识别项目模板。请在“更多 → 批量导入”下载模板；原悦山四表需先按 yueshan_check 核对，不能按旧列位置直接导入。")
     if clear:
         clear_business_data()
 
@@ -660,14 +671,15 @@ def import_template(file_obj, clear=False):
         if not person:
             raise TemplateImportError(f"入住 第 {row_number} 行找不到人员身份证：{id_number}")
         stay_type = map_choice(row[2], STAY_TYPE, "入住类型", "入住", row_number)
-        tenancy = room.active_tenancy(date_value(row[3], required=True)) if stay_type == Stay.Type.PERMANENT else None
+        start = date_value(row[3])
+        tenancy = room.active_tenancy() if stay_type == Stay.Type.PERMANENT else None
         Stay.objects.update_or_create(
             person=person,
             room=room,
             tenancy=tenancy,
             defaults={
                 "stay_type": stay_type,
-                "start_date": date_value(row[3], required=True),
+                "start_date": start,
                 "end_date": date_value(row[4]),
                 "is_active": bool_value(row[5], default=True),
                 "report_note": text(row[6]),

@@ -69,7 +69,7 @@ class BillingServiceTests(TestCase):
         self.assertEqual(rent.amount, Decimal("3000.00"))
         self.assertEqual(rent.period_start, date(2026, 4, 10))
         self.assertEqual(rent.period_end, date(2026, 5, 9))
-        self.assertEqual(tenancy.police_end_date, date(2026, 10, 10))
+        self.assertEqual(tenancy.police_end_date, date(2027, 4, 9))
 
     def test_billing_start_skips_historical_rent_generation(self):
         tenancy = sign_contract(
@@ -318,7 +318,7 @@ class BillingServiceTests(TestCase):
         self.assertEqual(charge.amount, Decimal("200.00"))
         self.assertEqual(tenancy.adjustments.count(), 1)
 
-    def test_checkout_removes_person_from_police_export(self):
+    def test_checkout_includes_person_as_departed_in_police_export(self):
         tenancy = sign_contract(
             room=self.room,
             person_data=self.person_data,
@@ -331,7 +331,8 @@ class BillingServiceTests(TestCase):
         self.assertFalse(stay.is_active)
         workbook = police_report_workbook(today=date(2026, 6, 2))
         values = [cell.value for row in workbook.active.iter_rows() for cell in row]
-        self.assertNotIn("张三", values)
+        self.assertIn("张三", values)
+        self.assertEqual(workbook.active.cell(3, 7).value, "退租")
 
     def test_planned_checkout_keeps_police_report_and_creates_refund_due(self):
         tenancy = sign_contract(
@@ -369,7 +370,8 @@ class BillingServiceTests(TestCase):
         )
         refund.refresh_from_db()
         self.assertEqual(refund.due_date, date(2026, 7, 30))
-        self.assertEqual(self.room.refresh_status(today=date(2026, 6, 16), save=False), Room.Status.EXPIRING)
+        self.assertEqual(self.room.refresh_status(today=date(2026, 6, 16), save=False), Room.Status.OCCUPIED)
+        self.assertEqual(self.room.refresh_status(today=date(2026, 7, 10), save=False), Room.Status.EXPIRING)
 
     def test_planned_checkout_removes_unpaid_future_rent_due(self):
         tenancy = sign_contract(
@@ -504,7 +506,7 @@ class BillingServiceTests(TestCase):
     def test_payment_form_has_payment_category(self):
         form = PaymentForm()
         self.assertIn("category", form.fields)
-        self.assertEqual([label for _, label in form.fields["category"].choices], ["押金", "租金", "其它"])
+        self.assertEqual([label for _, label in form.fields["category"].choices], ["自动抵扣（租金优先）", "指定押金", "租金及其他欠款"])
 
     def test_person_create_view_defaults_room_from_querystring(self):
         response = self.client.get(f"/people/new/?room={self.room.id}")
@@ -559,7 +561,7 @@ class BillingServiceTests(TestCase):
             end_date=date(2027, 10, 31),
             monthly_rent=Decimal("3000.00"),
         )
-        response = self.client.get("/bills/?direction=income&scope=month&month=2026-11")
+        response = self.client.get("/bills/?direction=income&scope=month&category=regular&month=2026-11")
         rows = response.context["bill_rows"]
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["rent_amount"], Decimal("3000.00"))
@@ -582,7 +584,7 @@ class BillingServiceTests(TestCase):
         response = self.client.post(
             "/bills/settle/",
             {"charge_ids": [str(rent.id), str(heating.id)], "amount": "3200"},
-            HTTP_REFERER="/bills/?direction=income&scope=month&month=2026-11",
+            HTTP_REFERER="/bills/?direction=income&scope=month&category=regular&month=2026-11",
         )
         self.assertEqual(response.status_code, 302)
         rent.refresh_from_db()
@@ -725,7 +727,7 @@ class BillingServiceTests(TestCase):
             amount=Decimal("500.00"),
             description="临时维修",
         )
-        response = self.client.get("/bills/?direction=expense&scope=month&month=2026-06")
+        response = self.client.get("/bills/?direction=expense&category=fixed&scope=month&month=2026-06")
         charge_ids = {charge_id for row in response.context["bill_rows"] for charge_id in row["charge_ids"]}
         self.assertEqual(charge_ids, {included.id})
         self.assertContains(response, "产权方房租")

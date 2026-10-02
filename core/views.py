@@ -1,7 +1,13 @@
 from django.contrib import messages
+from django.core.exceptions import ValidationError
+from django.forms import formset_factory, modelformset_factory
 from django.db import OperationalError, transaction
 from django.db.models import Prefetch, Q
-from django.shortcuts import get_object_or_404, redirect, render
+from django.shortcuts import get_object_or_404, redirect, render as django_render
+from django.urls import reverse
+from django.http import JsonResponse
+import hashlib
+import json
 from datetime import date, timedelta
 from decimal import Decimal
 import re
@@ -10,8 +16,15 @@ from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 
-from .exports import export_agent_room_status, export_import_template, export_police_report
+from .exports import agent_room_status_data, export_agent_room_status, export_import_template, export_police_report, police_report_rows, police_report_snapshot
 from .forms import (
+    AgentFeesForm,
+    DepositCollectionForm,
+    RoomListingPriceForm,
+    MonthlyRentCollectionForm,
+    CommonFeesForm,
+    RoommateForm,
+    RenewalForm,
     ChargeEditForm,
     CheckoutForm,
     BillPaymentEditForm,
@@ -23,6 +36,7 @@ from .forms import (
     PersonForm,
     PersonStayForm,
     PlannedCheckoutForm,
+    PoliceReportRowForm,
     PropertyRentRuleForm,
     RoomPersonForm,
     RoomForm,
@@ -30,14 +44,19 @@ from .forms import (
     TenancyEditForm,
     VisitorStayForm,
 )
-from .models import Charge, Payment, Person, RecurringRule, Room, Stay, Tenancy
-from .date_utils import money
+from .models import ApartmentSettings, Charge, Payment, Person, PoliceReportExport, RecurringRule, Room, Stay, Tenancy
+from .date_utils import money, long_term_first_rent, contract_months
 from .services import (
+    allocation_candidates,
+    renew_tenancy,
+    tenancy_finances,
+    tenancy_family_ids,
     cancel_planned_checkout,
     checkout_tenancy,
     clear_unpaid_property_rent_charges,
     collect_charge,
     create_visitor_stay,
+    create_charge,
     generate_due_charges,
     generate_property_rent_charges_until,
     generate_scheduled_due_charges,
@@ -53,9 +72,34 @@ from .services import (
     sign_contract,
 )
 from .spreadsheet_import import TemplateImportError, import_template
+from .rent_collection import monthly_rent_rows
+from .deposit_collection import collect_deposit, deposit_rows
+
+
+def _return_url(request):
+    target = request.POST.get("next") or request.GET.get("next")
+    if target and url_has_allowed_host_and_scheme(target, {request.get_host()}, require_https=request.is_secure()):
+        return target
+    return ""
+
+
+def _finish(request, name, **kwargs):
+    return redirect(_return_url(request) or reverse(name, kwargs=kwargs))
+
+
+def render(request, template, context=None, **kwargs):
+    context = dict(context or {})
+    fallback = "/rooms/"
+    if request.path.startswith(("/people/", "/stays/")): fallback = "/people/"
+    elif request.path.startswith(("/payments/", "/charges/", "/bills/")): fallback = "/bills/"
+    elif request.path.startswith("/tenancies/"): fallback = "/tenancies/"
+    context["return_url"] = _return_url(request) or fallback
+    return django_render(request, template, context, **kwargs)
 
 
 def _redirect_back(request, fallback_name, **fallback_kwargs):
+    if _return_url(request):
+        return redirect(_return_url(request))
     referer = request.META.get("HTTP_REFERER")
     if referer and url_has_allowed_host_and_scheme(
         referer,
@@ -101,35 +145,14 @@ def _generate_due_charges_or_warn(request, through_date, scheduled=False):
 
 
 def dashboard(request):
-    today = timezone.localdate()
-    _generate_due_charges_or_warn(request, today, scheduled=True)
-    open_charges = Charge.objects.exclude(status__in=[Charge.Status.PAID, Charge.Status.VOID])
-    overdue = open_charges.filter(due_date__lt=today)
-    due_soon = open_charges.filter(due_date__gte=today, due_date__lte=today + timedelta(days=7))
-    stats = {
-        "rooms": Room.objects.count(),
-        "vacant": Room.objects.filter(status=Room.Status.VACANT).count(),
-        "expiring": Room.objects.filter(status=Room.Status.EXPIRING).count(),
-        "active_tenancies": Tenancy.objects.filter(status=Tenancy.Status.ACTIVE).count(),
-        "open_income": money(sum((charge.balance for charge in open_charges.filter(direction=Charge.Direction.INCOME)), Decimal("0.00"))),
-        "open_expense": money(sum((charge.balance for charge in open_charges.filter(direction=Charge.Direction.EXPENSE)), Decimal("0.00"))),
-    }
-    context = {
-        "today": today,
-        "stats": stats,
-        "overdue_charges": overdue.select_related("room", "person", "tenancy")[:8],
-        "due_soon_charges": due_soon.select_related("room", "person", "tenancy")[:8],
-        "recent_payments": Payment.objects.select_related("room", "person", "tenancy")[:8],
-    }
-    return render(request, "core/dashboard.html", context)
-
+    return room_list(request)
 
 @require_POST
 def generate_charges_view(request):
     through = scheduled_due_through_date()
     created = generate_due_charges(through)
     messages.success(request, f"已刷新到 {through:%Y-%m-%d} 的待收待付，生成或更新 {len(created)} 条记录。")
-    return redirect("dashboard")
+    return _finish(request, "dashboard")
 
 
 def _sum_balances(charges):
@@ -137,44 +160,30 @@ def _sum_balances(charges):
 
 
 def _room_finance_summary(room):
-    charges = [
-        charge
-        for charge in room.charges.all()
-        if charge.status not in {Charge.Status.PAID, Charge.Status.VOID}
-    ]
-    open_income = [charge for charge in charges if charge.direction == Charge.Direction.INCOME]
-    open_expense = [charge for charge in charges if charge.direction == Charge.Direction.EXPENSE]
-    deposit_due = _sum_balances([charge for charge in open_income if charge.category == Charge.Category.DEPOSIT])
-    rent_due = _sum_balances([charge for charge in open_income if charge.category == Charge.Category.RENT])
-    heating_due = _sum_balances([charge for charge in open_income if charge.category == Charge.Category.HEATING])
-    other_due = _sum_balances(
-        [
-            charge
-            for charge in open_income
-            if charge.category not in {Charge.Category.DEPOSIT, Charge.Category.RENT, Charge.Category.HEATING}
-        ]
-    )
-    prepaid = money(
-        sum(
-            (
-                payment.unallocated_amount
-                for payment in room.payments.all()
-                if payment.direction == Payment.Direction.RECEIVE
-                if payment.unallocated_amount > 0
-            ),
-            Decimal("0.00"),
-        )
-    )
-    return {
-        "deposit_due": deposit_due,
-        "rent_due": rent_due,
-        "heating_due": heating_due,
-        "other_due": other_due,
-        "tenant_due": money(deposit_due + rent_due + heating_due + other_due),
-        "prepaid": prepaid,
-        "expense_due": _sum_balances(open_expense),
-    }
-
+    today = timezone.localdate()
+    related = Q(tenancy__room=room) | Q(room=room, tenancy__isnull=True)
+    charges = getattr(room, "finance_charges", None)
+    if charges is None:
+        charges = list(Charge.objects.filter(related).prefetch_related("allocations"))
+    payments = getattr(room, "finance_payments", None)
+    if payments is None:
+        payments = list(Payment.objects.filter(related).prefetch_related("allocations"))
+    has_receivables = any(c.direction == Charge.Direction.INCOME and c.status != Charge.Status.VOID for c in charges)
+    charges = [c for c in charges if c.status not in {Charge.Status.PAID, Charge.Status.VOID}]
+    income = [c for c in charges if c.direction == Charge.Direction.INCOME]
+    due = [c for c in income if c.due_date <= today]
+    categories = {"rent_due": Charge.Category.RENT, "deposit_due": Charge.Category.DEPOSIT, "heating_due": Charge.Category.HEATING}
+    summary = {key: _sum_balances([c for c in due if c.category == category]) for key, category in categories.items()}
+    summary.update({
+        "has_receivables": has_receivables,
+        "other_due": _sum_balances([c for c in due if c.category not in categories.values()]),
+        "tenant_due": _sum_balances(due),
+        "overdue": _sum_balances([c for c in due if c.due_date < today]),
+        "future_due": _sum_balances([c for c in income if c.due_date > today]),
+        "prepaid": money(sum((p.unallocated_amount for p in payments if p.direction == Payment.Direction.RECEIVE and p.auto_allocate and p.tenancy_id), Decimal("0.00"))),
+        "expense_due": _sum_balances([c for c in charges if c.direction == Charge.Direction.EXPENSE]),
+    })
+    return summary
 
 def _ledger_rows(charges, payments, reverse=False, sort_by="date"):
     rows = []
@@ -200,7 +209,7 @@ def _ledger_rows(charges, payments, reverse=False, sort_by="date"):
     for payment in payments:
         unallocated = payment.unallocated_amount
         status = "已处理"
-        if unallocated > 0:
+        if unallocated > 0 and payment.auto_allocate and payment.tenancy_id:
             status = "预收" if payment.direction == Payment.Direction.RECEIVE else "预付"
         rows.append(
             {
@@ -211,13 +220,13 @@ def _ledger_rows(charges, payments, reverse=False, sort_by="date"):
                 "room": payment.room,
                 "person": payment.person,
                 "amount": payment.amount,
-                "balance": unallocated,
+                "balance": unallocated if payment.auto_allocate and payment.tenancy_id else Decimal("0.00"),
                 "status": status,
                 "description": payment.memo,
                 "period_start": None,
                 "period_end": None,
                 "obj": payment,
-                "open": unallocated > 0,
+                "open": False,
             }
         )
     if sort_by == "room":
@@ -235,6 +244,7 @@ def _ledger_rows(charges, payments, reverse=False, sort_by="date"):
 
 def room_list(request):
     today = timezone.localdate()
+    _generate_due_charges_or_warn(request, today, scheduled=True)
     refresh_all_room_statuses(today)
     room_rows = []
     rooms = Room.objects.all().prefetch_related(
@@ -243,7 +253,6 @@ def room_list(request):
             queryset=Tenancy.objects.filter(
                 status=Tenancy.Status.ACTIVE,
                 start_date__lte=today,
-                end_date__gte=today,
             )
             .select_related("primary_person")
             .order_by("-start_date"),
@@ -251,13 +260,20 @@ def room_list(request):
         ),
         Prefetch(
             "stays",
-            queryset=Stay.objects.filter(is_active=True).select_related("person").order_by("person__name"),
+            queryset=Stay.objects.current(today).select_related("person").order_by("person__name"),
             to_attr="current_stays",
         ),
-        "charges",
-        "payments",
     )
+    charge_map, payment_map = {}, {}
+    for charge in Charge.objects.select_related("tenancy").prefetch_related("allocations"):
+        effective_room = charge.tenancy.room_id if charge.tenancy else charge.room_id
+        charge_map.setdefault(effective_room, []).append(charge)
+    for payment in Payment.objects.select_related("tenancy").prefetch_related("allocations"):
+        effective_room = payment.tenancy.room_id if payment.tenancy else payment.room_id
+        payment_map.setdefault(effective_room, []).append(payment)
     for room in sorted(rooms, key=lambda item: _room_number_sort_key(item.number)):
+        room.finance_charges = charge_map.get(room.pk, [])
+        room.finance_payments = payment_map.get(room.pk, [])
         finance = _room_finance_summary(room)
         room_rows.append(
             {
@@ -275,12 +291,30 @@ def room_list(request):
         }
         for value, label in Room.Status.choices
     ]
+    q = request.GET.get("q", "").strip()
+    selected_status = request.GET.get("status", "all")
+    total_rooms = len(room_rows)
+    overdue_rooms = sum(1 for row in room_rows if row["finance"]["overdue"] > 0)
+    for row in room_rows:
+        row["expired"] = bool(row["tenancy"] and row["tenancy"].end_date < today)
+        row["renewal"] = Tenancy.objects.filter(previous_tenancy=row["tenancy"]).first() if row["tenancy"] else None
+    if q:
+        room_rows = [row for row in room_rows if q.casefold() in row["room"].number.casefold() or any(q in stay.person.name or q in stay.person.phone for stay in row["people"])]
+    if selected_status == "debt":
+        room_rows = [row for row in room_rows if row["finance"]["tenant_due"] > 0]
+    elif selected_status in Room.Status.values:
+        room_rows = [row for row in room_rows if row["room"].status == selected_status]
+    expiring_count = sum(item["count"] for item in status_summaries if item["value"] == Room.Status.EXPIRING)
+    payable_count = Charge.objects.filter(direction=Charge.Direction.EXPENSE, due_date__lte=today).exclude(status__in=[Charge.Status.PAID, Charge.Status.VOID]).count()
     return render(
         request,
         "core/room_list.html",
         {
             "room_rows": room_rows,
+            "q": q, "selected_status": selected_status, "total_rooms": total_rooms,
+            "overdue_rooms": overdue_rooms, "expiring_count": expiring_count, "payable_count": payable_count,
             "status_summaries": status_summaries,
+            "pending_billing_count": Tenancy.objects.exclude(status=Tenancy.Status.ENDED).filter(billing_enabled=False).count(),
             "total_due": money(sum((row["finance"]["tenant_due"] for row in room_rows), Decimal("0.00"))),
             "total_prepaid": money(sum((row["finance"]["prepaid"] for row in room_rows), Decimal("0.00"))),
         },
@@ -293,7 +327,7 @@ def room_create(request):
         if form.is_valid():
             room = form.save()
             messages.success(request, f"已新增房间：{room.number}。")
-            return redirect("room_detail", pk=room.pk)
+            return _finish(request, "room_detail", pk=room.pk)
     else:
         form = RoomForm()
     return render(request, "core/form_page.html", {"form": form, "title": "新增房间", "submit_label": "保存房间"})
@@ -306,7 +340,7 @@ def room_edit(request, pk):
         if form.is_valid():
             room = form.save()
             messages.success(request, f"已更新房间：{room.number}。")
-            return redirect("room_detail", pk=room.pk)
+            return _finish(request, "room_detail", pk=room.pk)
     else:
         form = RoomForm(instance=room)
     return render(request, "core/form_page.html", {"form": form, "title": f"{room.number} 修改房间", "submit_label": "保存修改"})
@@ -317,14 +351,15 @@ def room_delete(request, pk):
     room = get_object_or_404(Room, pk=pk)
     if room.tenancies.exists() or room.stays.exists() or room.charges.exists() or room.payments.exists():
         messages.error(request, "这个房间已有合同、人员、账单或收付款记录，不能直接删除；可以改为自用或维修中。")
-        return redirect("room_detail", pk=room.pk)
+        return _finish(request, "room_detail", pk=room.pk)
     number = room.number
     room.delete()
     messages.success(request, f"已删除房间：{number}。")
-    return redirect("room_list")
+    return _finish(request, "room_list")
 
 
 def room_detail(request, pk):
+    refresh_all_room_statuses()
     today = timezone.localdate()
     room = get_object_or_404(Room.objects.prefetch_related("tenancies", "stays", "charges", "payments"), pk=pk)
     room.refresh_status(today=today)
@@ -345,45 +380,45 @@ def room_detail(request, pk):
     )
     all_charges = room.charges.exclude(status=Charge.Status.VOID)
     payments = room.payments.select_related("person", "tenancy").order_by("-date", "-id")
-    charge_total = money(sum((charge.amount for charge in all_charges), Decimal("0.00")))
-    payment_total = money(sum((payment.amount for payment in payments), Decimal("0.00")))
-    balance = money(charge_total - payment_total)
     context = {
         "today": today,
         "room": room,
+        "finance": _room_finance_summary(room),
+        "tenancy_finance": tenancy_finances(active_tenancy) if active_tenancy else None,
         "active_tenancy": active_tenancy,
         "latest_tenancy": latest_tenancy,
-        "active_stays": room.stays.select_related("person", "tenancy").filter(is_active=True),
+        "active_stays": room.stays.select_related("person", "tenancy").current(today),
         "open_charges": open_charges.order_by("due_date", "id"),
         "collection_charges": collection_charges,
         "ledger_charges": all_charges.select_related("person", "tenancy").order_by("due_date", "id"),
         "ledger_rows": _ledger_rows(all_charges.select_related("person", "tenancy"), payments, reverse=False),
         "recent_payments": payments[:10],
-        "charge_total": charge_total,
-        "payment_total": payment_total,
-        "balance": balance,
     }
     return render(request, "core/room_detail.html", context)
 
 
 def person_list(request):
-    rows = []
+    refresh_all_room_statuses()
+    today = timezone.localdate()
+    q = request.GET.get("q", "").strip()
+    scope = request.GET.get("scope", "active")
+    room_id = request.GET.get("room", "")
     people = Person.objects.prefetch_related("stays__room").all()
+    if q:
+        people = people.filter(Q(name__icontains=q) | Q(phone__icontains=q) | Q(id_number__icontains=q) | Q(stays__room__number__icontains=q)).distinct()
+    rows = []
     for person in people:
-        active_stays = [stay for stay in person.stays.all() if stay.is_active]
-        rooms = sorted({stay.room.number for stay in active_stays})
-        types = sorted({stay.get_stay_type_display() for stay in active_stays})
-        rows.append(
-            {
-                "person": person,
-                "rooms": "、".join(rooms),
-                "types": "、".join(types),
-                "sort_room": rooms[0] if rooms else "ZZZ",
-            }
-        )
-    rows.sort(key=lambda row: (row["sort_room"], row["person"].name))
-    return render(request, "core/person_list.html", {"person_rows": rows})
-
+        all_stays = list(person.stays.all())
+        stays = [stay for stay in all_stays if stay.active_on(today)]
+        display_stays = stays or all_stays
+        if scope == "active" and not stays: continue
+        if scope == "history" and stays: continue
+        if room_id and not any(str(stay.room_id) == room_id for stay in display_stays): continue
+        rooms = sorted({stay.room.number for stay in display_stays}, key=_room_number_sort_key)
+        rows.append({"person": person, "stays": stays, "rooms": "、".join(rooms), "types": "、".join(sorted({stay.get_stay_type_display() for stay in stays})), "sort_room": rooms[0] if rooms else "ZZZ", "visitor_due": any(stay.stay_type == Stay.Type.VISITOR and stay.end_date and stay.end_date <= today for stay in stays)})
+    rows.sort(key=lambda row: (_room_number_sort_key(row["sort_room"]), row["person"].name))
+    fingerprint = police_fingerprint()
+    return render(request, "core/person_list.html", {"person_rows": rows, "person_count": len(rows), "q": q, "scope": scope, "rooms": Room.objects.all(), "room_filter": room_id, "report_changed": request.session.get("police_fingerprint") != fingerprint, "last_export": request.session.get("police_export_time")})
 
 def person_detail(request, pk):
     person = get_object_or_404(Person.objects.prefetch_related("stays", "charges", "payments"), pk=pk)
@@ -404,7 +439,7 @@ def person_detail(request, pk):
 
 
 def _stay_start_date(cleaned_data):
-    return cleaned_data.get("start_date") or timezone.localdate()
+    return cleaned_data.get("start_date")
 
 
 def person_create(request):
@@ -425,7 +460,7 @@ def person_create(request):
             )
             room = cd["room"]
             start_date = _stay_start_date(cd)
-            tenancy = room.active_tenancy(start_date) if cd["stay_type"] == Stay.Type.PERMANENT else None
+            tenancy = room.active_tenancy() if cd["stay_type"] == Stay.Type.PERMANENT else None
             Stay.objects.create(
                 person=person,
                 room=room,
@@ -439,11 +474,14 @@ def person_create(request):
             )
             room.refresh_status(save=True)
             messages.success(request, f"已新增人员并关联房间：{room.number} {person.name}。")
-            return redirect("person_detail", pk=person.pk)
+            return _finish(request, "person_detail", pk=person.pk)
     else:
         initial = {"start_date": timezone.localdate()}
         if room_id := request.GET.get("room"):
             initial["room"] = room_id
+        if person_id := request.GET.get("person"):
+            person = get_object_or_404(Person, pk=person_id)
+            initial.update({field: getattr(person, field) for field in ["name", "id_number", "phone", "emergency_name", "emergency_phone", "emergency_address", "notes"]})
         form = PersonCreateForm(initial=initial)
     return render(request, "core/form_page.html", {"form": form, "title": "新增人员", "submit_label": "保存人员"})
 
@@ -455,7 +493,7 @@ def person_edit(request, pk):
         if form.is_valid():
             person = form.save()
             messages.success(request, f"已更新人员：{person.name}。")
-            return redirect("person_detail", pk=person.pk)
+            return _finish(request, "person_detail", pk=person.pk)
     else:
         form = PersonForm(instance=person)
     return render(request, "core/form_page.html", {"form": form, "title": f"{person.name} 修改人员", "submit_label": "保存修改"})
@@ -466,18 +504,20 @@ def person_delete(request, pk):
     person = get_object_or_404(Person, pk=pk)
     if person.stays.exists() or person.primary_tenancies.exists() or person.charges.exists() or person.payments.exists():
         messages.error(request, "这个人员已有入住、合同、账单或收付款记录，不能直接删除；可以先结束入住并保留历史。")
-        return redirect("person_detail", pk=person.pk)
+        return _finish(request, "person_detail", pk=person.pk)
     name = person.name
     person.delete()
     messages.success(request, f"已删除人员：{name}。")
-    return redirect("person_list")
+    return _finish(request, "person_list")
 
 
 def _save_person_stay(person, form, stay=None):
     cd = form.cleaned_data
     room = cd["room"]
     start_date = _stay_start_date(cd)
-    tenancy = room.active_tenancy(start_date) if cd["stay_type"] == Stay.Type.PERMANENT else None
+    tenancy = room.active_tenancy() if cd["stay_type"] == Stay.Type.PERMANENT else None
+    if stay and not cd["is_active"] and stay.room_id == room.pk:
+        tenancy = stay.tenancy
     if stay is None:
         stay = Stay(person=person)
     stay.person = person
@@ -497,13 +537,13 @@ def _save_person_stay(person, form, stay=None):
 def person_stay_create(request, pk):
     person = get_object_or_404(Person, pk=pk)
     if request.method == "POST":
-        form = PersonStayForm(request.POST)
+        form = PersonStayForm(request.POST, person=person)
         if form.is_valid():
             stay = _save_person_stay(person, form)
             messages.success(request, f"已添加入住记录：{stay.room.number}。")
-            return redirect("person_detail", pk=person.pk)
+            return _finish(request, "person_detail", pk=person.pk)
     else:
-        form = PersonStayForm(initial={"start_date": timezone.localdate(), "is_active": True})
+        form = PersonStayForm(initial={"start_date": timezone.localdate(), "is_active": True}, person=person)
     return render(request, "core/form_page.html", {"form": form, "title": f"{person.name} 添加入住", "submit_label": "保存入住"})
 
 
@@ -511,11 +551,11 @@ def person_stay_edit(request, person_pk, stay_pk):
     person = get_object_or_404(Person, pk=person_pk)
     stay = get_object_or_404(Stay, pk=stay_pk, person=person)
     if request.method == "POST":
-        form = PersonStayForm(request.POST)
+        form = PersonStayForm(request.POST, person=person, stay=stay)
         if form.is_valid():
             _save_person_stay(person, form, stay=stay)
             messages.success(request, "已更新入住记录。")
-            return redirect("person_detail", pk=person.pk)
+            return _finish(request, "person_detail", pk=person.pk)
     else:
         form = PersonStayForm(
             initial={
@@ -535,11 +575,13 @@ def person_stay_edit(request, person_pk, stay_pk):
 def person_stay_remove(request, person_pk, stay_pk):
     person = get_object_or_404(Person, pk=person_pk)
     stay = get_object_or_404(Stay, pk=stay_pk, person=person)
+    if not stay.is_active:
+        return _finish(request, "person_detail", pk=person.pk)
     stay.is_active = False
-    stay.end_date = stay.end_date or timezone.localdate()
+    stay.end_date = timezone.localdate()
     stay.save(update_fields=["is_active", "end_date"])
     messages.success(request, "已结束该入住记录。")
-    return redirect("person_detail", pk=person.pk)
+    return _finish(request, "person_detail", pk=person.pk)
 
 
 def import_workbook_view(request):
@@ -553,7 +595,7 @@ def import_workbook_view(request):
             else:
                 summary = "，".join(f"{key}{value}" for key, value in counts.items())
                 messages.success(request, f"导入完成：{summary}。")
-                return redirect("dashboard")
+                return _finish(request, "dashboard")
     else:
         form = ImportWorkbookForm()
     return render(request, "core/form_page.html", {"form": form, "title": "导入标准模板", "submit_label": "开始导入"})
@@ -561,7 +603,15 @@ def import_workbook_view(request):
 
 def tenancy_list(request):
     sort = request.GET.get("sort", "room")
-    tenancies = list(Tenancy.objects.select_related("room", "primary_person", "broker").all())
+    refresh_all_room_statuses()
+    q = request.GET.get("q", "").strip()
+    scope = request.GET.get("scope", "current")
+    queryset = Tenancy.objects.select_related("room", "primary_person", "broker", "renewal")
+    if scope == "current": queryset = queryset.exclude(status=Tenancy.Status.ENDED)
+    elif scope == "ended": queryset = queryset.filter(status=Tenancy.Status.ENDED)
+    elif scope == "expiring": queryset = queryset.filter(status=Tenancy.Status.ACTIVE, end_date__lte=timezone.localdate() + timedelta(days=30))
+    if q: queryset = queryset.filter(Q(room__number__icontains=q) | Q(primary_person__name__icontains=q))
+    tenancies = list(queryset)
     if sort == "start":
         tenancies.sort(key=lambda tenancy: (tenancy.start_date, tenancy.room.number))
     elif sort == "checkout":
@@ -574,7 +624,7 @@ def tenancy_list(request):
     else:
         sort = "room"
         tenancies.sort(key=lambda tenancy: (tenancy.room.number, tenancy.start_date))
-    return render(request, "core/tenancy_list.html", {"tenancies": tenancies, "sort": sort})
+    return render(request, "core/tenancy_list.html", {"tenancies": tenancies, "sort": sort, "q": q, "scope": scope})
 
 
 def tenancy_edit(request, pk):
@@ -601,7 +651,7 @@ def tenancy_edit(request, pk):
                 old_room.refresh_status(save=True)
                 tenancy.stays.filter(is_active=True).update(room=tenancy.room)
             messages.success(request, "已更新合同。")
-            return redirect("room_detail", pk=tenancy.room_id)
+            return _finish(request, "room_detail", pk=tenancy.room_id)
     else:
         form = TenancyEditForm(instance=tenancy)
     return render(request, "core/form_page.html", {"form": form, "title": f"{tenancy.room.number} 修改合同", "submit_label": "保存合同"})
@@ -613,99 +663,55 @@ def tenancy_delete(request, pk):
     room_id = tenancy.room_id
     if tenancy.charges.exists() or tenancy.payments.exists():
         messages.error(request, "这个合同已有账单或收付款记录，不能直接删除；可以退租或改为已退租。")
-        return redirect("room_detail", pk=room_id)
+        return _finish(request, "room_detail", pk=room_id)
     tenancy.stays.update(tenancy=None)
     tenancy.delete()
     Room.objects.get(pk=room_id).refresh_status(save=True)
     messages.success(request, "已删除合同。")
-    return redirect("room_detail", pk=room_id)
+    return _finish(request, "room_detail", pk=room_id)
 
 
 def sign_contract_view(request):
-    refresh_all_room_statuses()
-    vacant_rooms = Room.objects.filter(status=Room.Status.VACANT).order_by("number")
-    if request.method == "POST":
-        form = SignContractForm(request.POST, room_queryset=vacant_rooms)
-        if form.is_valid():
-            cd = form.cleaned_data
-            tenancy = sign_contract(
-                room=cd["room"],
-                person_data={
-                    "name": cd["person_name"],
-                    "id_number": cd["id_number"],
-                    "phone": cd["phone"],
-                    "emergency_name": cd["emergency_name"],
-                    "emergency_phone": cd["emergency_phone"],
-                    "emergency_address": cd["emergency_address"],
-                },
-                start_date=cd["start_date"],
-                end_date=cd["end_date"],
-                monthly_rent=cd["monthly_rent"],
-                payment_cycle=cd["payment_cycle"],
-                deposit_amount=cd["deposit_amount"],
-                broker_name=cd["broker_name"],
-                commission_manual_amount=cd["commission_manual_amount"],
-                first_month_discount=cd["first_month_discount"] or 0,
-                notes=cd["notes"],
-            )
-            messages.success(request, f"已签约：{tenancy.room.number} {tenancy.primary_person.name}。")
-            return redirect("room_detail", pk=tenancy.room_id)
-    else:
-        form = SignContractForm(room_queryset=vacant_rooms)
-    return render(
-        request,
-        "core/sign_contract.html",
-        {"form": form, "title": "签约", "submit_label": "保存合同", "contract_room": None},
-    )
+    return _sign_contract_page(request)
 
 
 def room_contract_create(request, pk):
     room = get_object_or_404(Room, pk=pk)
-    if room.status != Room.Status.VACANT:
-        messages.error(request, "只有空房可以签约，请先确认房态。")
-        return redirect("room_detail", pk=room.pk)
-    active_tenancy = room.active_tenancy()
-    if active_tenancy:
-        messages.error(request, f"{room.number} 已有关联合同，不能重复登记。")
-        return redirect("room_detail", pk=room.pk)
-    if request.method == "POST":
-        form = SignContractForm(request.POST, fixed_room=room)
-        if form.is_valid():
-            cd = form.cleaned_data
-            tenancy = sign_contract(
-                room=room,
-                person_data={
-                    "name": cd["person_name"],
-                    "id_number": cd["id_number"],
-                    "phone": cd["phone"],
-                    "emergency_name": cd["emergency_name"],
-                    "emergency_phone": cd["emergency_phone"],
-                    "emergency_address": cd["emergency_address"],
-                },
-                start_date=cd["start_date"],
-                end_date=cd["end_date"],
-                monthly_rent=cd["monthly_rent"],
-                payment_cycle=cd["payment_cycle"],
-                deposit_amount=cd["deposit_amount"],
-                broker_name=cd["broker_name"],
-                commission_manual_amount=cd["commission_manual_amount"],
-                first_month_discount=cd["first_month_discount"] or 0,
-                notes=cd["notes"],
-            )
-            messages.success(request, f"已登记合同：{tenancy.room.number} {tenancy.primary_person.name}。")
-            return redirect("room_detail", pk=room.pk)
-    else:
-        form = SignContractForm(fixed_room=room)
-    return render(
-        request,
-        "core/sign_contract.html",
-        {
-            "form": form,
-            "title": f"{room.number} 登记合同",
-            "submit_label": "保存合同",
-            "contract_room": room,
-        },
-    )
+    room.refresh_status()
+    if room.status != Room.Status.VACANT or room.active_tenancy():
+        messages.error(request, "只有空房可以办理入住，请先确认房态。")
+        return _finish(request, "room_detail", pk=room.pk)
+    return _sign_contract_page(request, room)
+
+
+def _sign_contract_page(request, room=None):
+    refresh_all_room_statuses()
+    vacant = Room.objects.filter(status=Room.Status.VACANT).order_by("number")
+    data = request.POST if request.method == "POST" else None
+    initial = {"start_date": timezone.localdate()}
+    if room: initial.update({"monthly_rent": room.listing_price, "room": room})
+    form = SignContractForm(data, fixed_room=room, room_queryset=vacant, initial=initial)
+    Roommates = formset_factory(RoommateForm, extra=1, max_num=10, validate_max=True)
+    # Old clients can still submit a contract without the optional roommate formset.
+    roommates = Roommates(data if data and "roommates-TOTAL_FORMS" in data else None, prefix="roommates")
+    if request.method == "POST" and form.is_valid() and (not roommates.is_bound or roommates.is_valid()):
+        cd = form.cleaned_data
+        roommate_data = [row for row in roommates.cleaned_data if row] if roommates.is_bound else []
+        ids = [cd["id_number"], *[row["id_number"] for row in roommate_data]]
+        if len(ids) != len(set(ids)):
+            form.add_error(None, "主租客与同住人的身份证不能重复。")
+        else:
+            try:
+                tenancy = sign_contract(
+                    room=cd["room"], person_data={"name": cd["person_name"], **{key: cd[key] for key in ["id_number", "phone", "emergency_name", "emergency_phone", "emergency_address"]}},
+                    start_date=cd["start_date"], end_date=cd["end_date"], monthly_rent=cd["monthly_rent"], payment_cycle=cd["payment_cycle"], deposit_amount=cd["deposit_amount"], broker_name=cd["broker_name"], commission_manual_amount=cd["commission_manual_amount"], first_month_discount=cd["first_month_discount"] or 0, notes=cd["notes"], received_amount=cd.get("received_amount"), roommates=roommate_data,
+                )
+            except ValueError as exc:
+                form.add_error(None, str(exc))
+            else:
+                messages.success(request, f"已办理入住：{tenancy.room.number} {tenancy.primary_person.name}，合同、人员和首期费用已同步保存。")
+                return _finish(request, "room_detail", pk=tenancy.room_id)
+    return render(request, "core/sign_contract.html", {"form": form, "roommates": roommates, "title": f"{room.number} 办理入住" if room else "办理入住", "submit_label": "保存入住", "contract_room": room})
 
 
 def _room_person_initial(stay):
@@ -740,7 +746,7 @@ def _save_room_person(room, form, stay=None):
             "notes": cd["person_notes"],
         },
     )
-    tenancy = room.active_tenancy(start_date) if cd["stay_type"] == Stay.Type.PERMANENT else None
+    tenancy = room.active_tenancy() if cd["stay_type"] == Stay.Type.PERMANENT else None
     if stay is None:
         stay = Stay(person=person, room=room)
     stay.person = person
@@ -759,11 +765,11 @@ def _save_room_person(room, form, stay=None):
 def room_person_create(request, pk):
     room = get_object_or_404(Room, pk=pk)
     if request.method == "POST":
-        form = RoomPersonForm(request.POST)
+        form = RoomPersonForm(request.POST, room=room)
         if form.is_valid():
             stay = _save_room_person(room, form)
             messages.success(request, f"已添加人员：{stay.person.name}。")
-            return redirect("room_detail", pk=room.pk)
+            return _finish(request, "room_detail", pk=room.pk)
     else:
         form = RoomPersonForm(initial={"start_date": timezone.localdate()})
     return render(request, "core/form_page.html", {"form": form, "title": f"{room.number} 添加人员", "submit_label": "保存人员"})
@@ -773,11 +779,11 @@ def room_person_edit(request, room_pk, stay_pk):
     room = get_object_or_404(Room, pk=room_pk)
     stay = get_object_or_404(Stay.objects.select_related("person"), pk=stay_pk, room=room)
     if request.method == "POST":
-        form = RoomPersonForm(request.POST)
+        form = RoomPersonForm(request.POST, room=room, stay=stay)
         if form.is_valid():
             stay = _save_room_person(room, form, stay=stay)
             messages.success(request, f"已更新人员：{stay.person.name}。")
-            return redirect("room_detail", pk=room.pk)
+            return _finish(request, "room_detail", pk=room.pk)
     else:
         form = RoomPersonForm(initial=_room_person_initial(stay))
     return render(request, "core/form_page.html", {"form": form, "title": f"{room.number} 修改人员", "submit_label": "保存修改"})
@@ -787,68 +793,87 @@ def room_person_edit(request, room_pk, stay_pk):
 def room_person_remove(request, room_pk, stay_pk):
     room = get_object_or_404(Room, pk=room_pk)
     stay = get_object_or_404(Stay, pk=stay_pk, room=room)
+    if not stay.is_active:
+        return _finish(request, "room_detail", pk=room.pk)
     stay.is_active = False
-    stay.end_date = stay.end_date or timezone.localdate()
+    stay.end_date = timezone.localdate()
     stay.save(update_fields=["is_active", "end_date"])
     messages.success(request, f"已移除当前人员：{stay.person.name}。")
-    return redirect("room_detail", pk=room.pk)
+    return _finish(request, "room_detail", pk=room.pk)
 
 
 def payment_create(request):
-    if request.method == "POST":
-        form = PaymentForm(request.POST)
-        if form.is_valid():
-            cd = form.cleaned_data
-            room = cd["room"]
-            tenancy = room.active_tenancy(cd["date"]) if room else None
-            payment = record_payment(
-                direction=cd["direction"],
-                category=cd["category"],
-                date=cd["date"],
-                amount=cd["amount"],
-                tenancy=tenancy,
-                room=room,
-                person=tenancy.primary_person if tenancy else None,
-                memo=cd["memo"],
-                auto_allocate=True,
-            )
-            messages.success(request, f"已记录{payment.get_direction_display()}款 {payment.amount}。")
-            return redirect("room_detail", pk=room.pk) if room else redirect("dashboard")
-    else:
-        initial = {"date": timezone.localdate(), "direction": Payment.Direction.RECEIVE}
-        if room_id := request.GET.get("room"):
-            initial["room"] = room_id
-        form = PaymentForm(initial=initial)
-    return render(request, "core/form_page.html", {"form": form, "title": "记录收付款", "submit_label": "保存记录"})
+    refresh_all_room_statuses()
+    initial = {"date": timezone.localdate(), "direction": request.GET.get("direction", Payment.Direction.RECEIVE), "room": request.GET.get("room"), "category": Payment.Category.DEPOSIT if request.GET.get("category") == Payment.Category.DEPOSIT else Payment.Category.OTHER}
+    form = PaymentForm(request.POST if request.method == "POST" else None, initial=initial)
+    if request.method == "POST" and form.is_valid():
+        cd = form.cleaned_data
+        room = cd["room"] or (cd["tenancy"].room if cd.get("tenancy") else None)
+        tenancy = cd.get("tenancy") or (room.active_tenancy(cd["date"]) if room else None)
+        payment = record_payment(direction=cd["direction"], category=cd["category"], date=cd["date"], amount=cd["amount"], tenancy=tenancy, room=room, person=tenancy.primary_person if tenancy else None, memo=cd["memo"], auto_allocate=cd["direction"] == Payment.Direction.RECEIVE)
+        message = f"已记录{payment.get_direction_display()}款 ¥{payment.amount}。"
+        if tenancy and payment.direction == Payment.Direction.RECEIVE:
+            finance = tenancy_finances(tenancy)
+            message += f" 当前到期未收 ¥{finance['due']}，预存余额 ¥{finance['prepaid']}。"
+        messages.success(request, message)
+        return _finish(request, "charge_list")
+    return render(request, "core/form_page.html", {"form": form, "title": "收款 / 记支出", "submit_label": "确认保存", "payment_preview": True})
 
+
+def payment_preview(request):
+    form = PaymentForm(request.GET)
+    if not form.is_valid():
+        return JsonResponse({"error": "请选择房间并填写有效金额和日期。"}, status=400)
+    cd = form.cleaned_data
+    room = cd["room"] or (cd["tenancy"].room if cd.get("tenancy") else None)
+    tenancy = cd.get("tenancy") or (room.active_tenancy(cd["date"]) if room else None)
+    payment = Payment(direction=cd["direction"], category=cd["category"], amount=cd["amount"], date=cd["date"], room=room, tenancy=tenancy, auto_allocate=cd["direction"] == Payment.Direction.RECEIVE)
+    remaining = cd["amount"]
+    items = []
+    for charge in allocation_candidates(payment):
+        amount = min(remaining, charge.balance)
+        if amount > 0:
+            items.append(f"{charge.description}：抵扣 ¥{amount:.2f}")
+            remaining -= amount
+    label = "预存余额" if tenancy and payment.direction == Payment.Direction.RECEIVE else "独立收支（不抵扣其他账单）"
+    finance = tenancy_finances(tenancy) if tenancy else None
+    return JsonResponse({"items": items, "remaining": str(remaining), "remaining_label": label, "person": tenancy.primary_person.name if tenancy else "公共或无合同收支", "current_due": str(finance["due"]) if finance else None})
 
 def _refresh_charges(charge_ids):
     for charge in Charge.objects.filter(id__in=charge_ids):
         charge.refresh_status()
 
 
+@transaction.atomic
 def payment_edit(request, pk):
     payment = get_object_or_404(Payment.objects.select_related("room", "person", "tenancy"), pk=pk)
-    if request.method == "POST":
-        form = PaymentForm(request.POST, instance=payment)
-        if form.is_valid():
-            old_charge_ids = list(payment.allocations.values_list("charge_id", flat=True))
-            payment.allocations.all().delete()
-            _refresh_charges(old_charge_ids)
+    charges = [allocation.charge for allocation in payment.allocations.select_related("charge")]
+    if charges:
+        maximum = money(sum((charge.balance for charge in charges), Decimal("0.00")) + payment.allocated_amount)
+        form = BillPaymentEditForm(request.POST if request.method == "POST" else None, initial={"date": payment.date, "amount": payment.amount, "memo": payment.memo}, maximum=maximum)
+        if request.method == "POST" and form.is_valid():
+            try:
+                revise_settlement_payment(payment, **form.cleaned_data)
+            except ValueError as exc:
+                form.add_error(None, str(exc))
+            else:
+                messages.success(request, "已修改这笔收付款，仅重新抵扣原账单。")
+                return _finish(request, "charge_list")
+    else:
+        form = PaymentForm(request.POST if request.method == "POST" else None, instance=payment)
+        if request.method == "POST" and form.is_valid():
             cd = form.cleaned_data
             payment = form.save(commit=False)
-            room = cd["room"]
-            tenancy = room.active_tenancy(cd["date"]) if room else None
-            payment.room = room
-            payment.tenancy = tenancy
+            room = cd["room"] or (cd["tenancy"].room if cd.get("tenancy") else None)
+            tenancy = cd.get("tenancy") or (room.active_tenancy(cd["date"]) if room else None)
+            payment.room, payment.tenancy = room, tenancy
             payment.person = tenancy.primary_person if tenancy else None
+            payment.auto_allocate = cd["direction"] == Payment.Direction.RECEIVE
             payment.save()
             allocate_payment(payment)
             messages.success(request, "已更新收付款记录。")
-            return redirect("room_detail", pk=room.pk) if room else redirect("dashboard")
-    else:
-        form = PaymentForm(instance=payment)
-    return render(request, "core/form_page.html", {"form": form, "title": "修改收付款", "submit_label": "保存修改"})
+            return _finish(request, "charge_list")
+    return render(request, "core/form_page.html", {"form": form, "title": "修改收付款", "submit_label": "保存修改", "form_note": "已有抵扣记录时，只调整原账单的金额；更换对象请先撤销原流水，再重新登记。" if charges else ""})
 
 
 @require_POST
@@ -902,15 +927,15 @@ def _receivable_bill_rows(charges):
         allocated = _charge_allocated_amount(charge)
         balance = money(charge.amount - allocated)
         tenant_key = (charge.tenancy_id, charge.room_id)
-        if balance > 0:
+        if balance > 0 and charge.due_date <= timezone.localdate():
             cumulative_due[tenant_key] = money(cumulative_due.get(tenant_key, Decimal("0.00")) + balance)
-        key = (*tenant_key, _charge_bill_month(charge))
+        key = (*tenant_key, _charge_bill_month(charge), None if charge.category in {Charge.Category.RENT, Charge.Category.HEATING} and charge.tenancy_id else charge.pk)
         if key not in grouped:
             grouped[key] = {
                 "room": charge.room,
                 "person": charge.person,
                 "tenancy": charge.tenancy,
-                "bill_month": key[-1],
+                "bill_month": key[2],
                 "charges": [],
                 "charge_ids": [],
                 "components": [],
@@ -929,7 +954,9 @@ def _receivable_bill_rows(charges):
         row["charge_ids"].append(charge.id)
         row["components"].append(
             {
+                "id": charge.id,
                 "category": charge.category,
+                "due_date": charge.due_date,
                 "label": charge.get_category_display(),
                 "period_start": charge.period_start,
                 "period_end": charge.period_end,
@@ -998,8 +1025,11 @@ def bill_list(request):
     default_start = date(default_through.year, default_through.month, 1)
     month_start, month_end = _month_bounds(request.GET.get("month"), default_start=default_start)
     direction = request.GET.get("direction", "income")
-    scope = request.GET.get("scope", "month")
+    scope = request.GET.get("scope", "month" if request.GET.get("month") else "all")
     status = request.GET.get("status", "all")
+    category = request.GET.get("category", "all")
+    q = request.GET.get("q", "").strip()
+    timing = request.GET.get("timing", "all")
     through_date = month_end if scope == "month" else default_through
     _generate_due_charges_or_warn(request, through_date)
 
@@ -1009,14 +1039,11 @@ def bill_list(request):
             .prefetch_related("allocations__payment__allocations")
             .filter(
                 direction=Charge.Direction.EXPENSE,
-                category__in=[
-                    Charge.Category.COMMISSION,
-                    Charge.Category.DEPOSIT_REFUND,
-                    Charge.Category.PROPERTY_RENT,
-                ],
+
             )
             .exclude(status=Charge.Status.VOID)
         )
+        charges = _filter_bills(charges, category, q, timing, request.GET.get("room"))
         rows = _payable_bill_rows(charges)
     else:
         direction = "income"
@@ -1025,11 +1052,19 @@ def bill_list(request):
             .prefetch_related("allocations__payment__allocations")
             .filter(
                 direction=Charge.Direction.INCOME,
-                category__in=[Charge.Category.RENT, Charge.Category.HEATING],
+
             )
             .exclude(status=Charge.Status.VOID)
         )
+        cumulative = {}
+        for charge in charges:
+            if charge.due_date <= timezone.localdate():
+                key = (charge.tenancy_id, charge.room_id)
+                cumulative[key] = cumulative.get(key, Decimal("0.00")) + charge.balance
+        charges = _filter_bills(charges, category, q, timing, request.GET.get("room"))
         rows = _receivable_bill_rows(charges)
+        for row in rows:
+            row["cumulative_due"] = money(cumulative.get((row["tenancy"].pk if row["tenancy"] else None, row["room"].pk if row["room"] else None), Decimal("0.00")))
 
     if scope == "month":
         rows = [row for row in rows if month_start <= row["bill_month"] <= month_end]
@@ -1064,6 +1099,7 @@ def bill_list(request):
         "core/bill_list.html",
         {
             "bill_rows": rows,
+            "q": q, "category": category, "timing": timing, "room_filter": request.GET.get("room", ""),
             "direction": direction,
             "scope": scope,
             "status": status,
@@ -1078,6 +1114,151 @@ def bill_list(request):
     )
 
 
+def monthly_rent_collection(request):
+    today = timezone.localdate()
+    source = request.POST if request.method == "POST" else request.GET
+    month_field = MonthlyRentCollectionForm.base_fields["month"]
+    try:
+        month = month_field.clean(source.get("month") or f"{scheduled_due_through_date(today):%Y-%m}")
+    except ValidationError:
+        messages.error(request, "请选择有效的房租月份。")
+        month = date(today.year, today.month, 1)
+        if request.method == "POST":
+            return redirect(f"{reverse('monthly_rent_collection')}?month={month:%Y-%m}")
+    rows = monthly_rent_rows(month)
+    data = request.POST.copy() if request.method == "POST" else None
+    if data is not None and data.get("single_row"):
+        key = data["single_row"]
+        data["action"] = "single"
+        data.setlist("rows", [key])
+        data["amount"] = data.get(f"partial_{key}", "")
+    form = MonthlyRentCollectionForm(
+        data, rent_rows=rows,
+        initial={"month": month, "date": today, "action": "bulk"},
+    )
+    if request.method == "POST" and form.is_valid():
+        cd = form.cleaned_data
+        try:
+            if not cd["rows"]:
+                raise ValueError("请勾选已实际交租的房间，或粘贴房号带入选择。")
+            if cd["action"] == "single" and len(cd["rows"]) != 1:
+                raise ValueError("单笔收租请选择一间房。")
+            if cd["action"] == "bulk" and any(data.get(f"partial_{key}") for key in cd["rows"]):
+                raise ValueError("已填写单笔实收金额，请先用该房间的“记录收款”保存，或清空金额后再批量收齐。")
+            with transaction.atomic():
+                current = {row["key"]: row for row in monthly_rent_rows(month)}
+                count, skipped, total = 0, 0, Decimal("0.00")
+                for key in dict.fromkeys(cd["rows"]):
+                    row = current.get(key)
+                    if row is None:
+                        raise ValueError("部分房租已变更或作废，请刷新页面后重新选择。")
+                    if row["balance"] <= 0:
+                        skipped += 1
+                        continue
+                    charges = row["charges"]
+                    if row["draft"]:
+                        spec = dict(row["draft"])
+                        spec["amount"] = cd.get(f"rent_amount_{key}") or row["amount"]
+                        if spec["amount"] <= 0:
+                            raise ValueError("本期应收金额必须大于 0。")
+                        charges = [create_charge(**spec, source=Charge.Source.MANUAL)]
+                    if row["tenancy"]:
+                        existing_receipts = Payment.objects.filter(
+                            tenancy_id__in=tenancy_family_ids(row["tenancy"]),
+                            direction=Payment.Direction.RECEIVE, auto_allocate=True,
+                        ).prefetch_related("allocations").order_by("date", "id")
+                        for receipt in existing_receipts:
+                            if receipt.unallocated_amount > 0:
+                                allocate_payment(receipt)
+                    # Read fresh balances; a repeated submission must not create another receipt.
+                    charges = list(Charge.objects.filter(pk__in=[charge.pk for charge in charges]).exclude(status=Charge.Status.VOID))
+                    if not charges:
+                        raise ValueError("房租账单已经失效，请刷新页面。")
+                    if sum((charge.balance for charge in charges), Decimal("0.00")) <= 0:
+                        skipped += 1
+                        continue
+                    payment = settle_charges(
+                        charges, amount=cd["amount"] if cd["action"] == "single" else None,
+                        date=cd["date"], memo=f"{month:%Y年%m月}房租 · {'单笔收租' if cd['action'] == 'single' else '批量收租'}",
+                    )
+                    count += 1
+                    total = money(total + payment.amount)
+        except ValueError as exc:
+            form.add_error(None, str(exc))
+        else:
+            messages.success(request, f"已记录 {count} 户房租，共 ¥{total}。" + (f"跳过 {skipped} 户已交齐的房间。" if skipped else ""))
+            return redirect(f"{reverse('monthly_rent_collection')}?month={month:%Y-%m}")
+    selected_numbers = {number.upper() for number in re.split(r"[\s,，、;；]+", request.GET.get("room_numbers", "").strip()) if number}
+    for row in rows:
+        row["selected"] = row["key"] in data.getlist("rows") if data is not None else row["room"].number.upper() in selected_numbers and row["balance"] > 0
+        row["amount_field"] = form[f"rent_amount_{row['key']}"] if row["draft"] else None
+        row["partial_amount"] = request.POST.get(f"partial_{row['key']}", "")
+    if selected_numbers:
+        available = {row["room"].number.upper(): row for row in rows}
+        missing = sorted(selected_numbers - available.keys())
+        paid = sorted(number for number in selected_numbers & available.keys() if available[number]["balance"] <= 0)
+        if missing:
+            messages.warning(request, "这些房号没有当月可登记房租，请核对：" + "、".join(missing))
+        if paid:
+            messages.info(request, "已交齐，已跳过：" + "、".join(paid))
+    return render(request, "core/monthly_rent_collection.html", {
+        "form": form, "rent_rows": rows, "month": month, "month_value": f"{month:%Y-%m}",
+        "room_numbers": request.GET.get("room_numbers", ""),
+        "paid_count": sum(row["status"] == "paid" for row in rows),
+        "open_count": sum(row["status"] != "paid" for row in rows),
+        "total_paid": money(sum((row["paid"] for row in rows), Decimal("0.00"))),
+        "total_balance": money(sum((row["balance"] for row in rows), Decimal("0.00"))),
+    })
+
+
+def deposit_collection_view(request):
+    rows = deposit_rows()
+    data = request.POST.copy() if request.method == "POST" else None
+    if data is not None and data.get("single_row"):
+        key = data["single_row"]
+        data["action"] = "single"
+        data.setlist("rows", [key])
+        data["amount"] = data.get(f"partial_{key}", "")
+    form = DepositCollectionForm(data, deposit_rows=rows, initial={"date": timezone.localdate(), "action": "bulk"})
+    if request.method == "POST" and form.is_valid():
+        cd = form.cleaned_data
+        try:
+            if not cd["rows"]:
+                raise ValueError("请勾选已实际收到押金的房间。")
+            if cd["action"] == "single" and len(cd["rows"]) != 1:
+                raise ValueError("单笔登记请选择一间房。")
+            if cd["action"] == "bulk" and any(data.get(f"partial_{key}") for key in cd["rows"]):
+                raise ValueError("已填写本次实收，请先用该房间的“记录本笔押金”保存，或清空金额再批量登记。")
+            count, skipped, total = 0, 0, Decimal("0.00")
+            with transaction.atomic():
+                for key in dict.fromkeys(cd["rows"]):
+                    payment = collect_deposit(
+                        key, date=cd["date"], amount=cd["amount"], single=cd["action"] == "single",
+                        deposit_amount=cd.get(f"deposit_amount_{key}"),
+                    )
+                    if payment is None:
+                        skipped += 1
+                    else:
+                        count += 1
+                        total = money(total + payment.amount)
+        except (ValueError, Tenancy.DoesNotExist) as exc:
+            form.add_error(None, str(exc) if isinstance(exc, ValueError) else "合同已变更，请刷新页面。")
+        else:
+            messages.success(request, f"已登记 {count} 户押金实收，共 ¥{total}。" + (f"另有 {skipped} 户无需新增收款。" if skipped else ""))
+            return redirect("deposit_collection")
+    for row in rows:
+        row["amount_field"] = form[f"deposit_amount_{row['key']}"] if row["draft"] else None
+        row["selected"] = data is not None and row["key"] in data.getlist("rows")
+        row["partial_amount"] = request.POST.get(f"partial_{row['key']}", "")
+    return render(request, "core/deposit_collection.html", {
+        "form": form, "deposit_rows": rows,
+        "paid_count": sum(row["status"] == "paid" for row in rows),
+        "open_count": sum(row["status"] in {"open", "partial"} for row in rows),
+        "total_paid": money(sum((row["paid"] for row in rows), Decimal("0.00"))),
+        "total_balance": money(sum((row["balance"] for row in rows if not row["void"]), Decimal("0.00"))),
+    })
+
+
 def collection_list(request):
     return bill_list(request)
 
@@ -1087,8 +1268,6 @@ def _validate_bill_charge_group(charges):
         raise ValueError("账单不存在或已经失效。")
     directions = {charge.direction for charge in charges}
     if directions == {Charge.Direction.INCOME}:
-        if any(charge.category not in {Charge.Category.RENT, Charge.Category.HEATING} for charge in charges):
-            raise ValueError("待收账单只支持房租和取暖费。")
         keys = {
             (charge.tenancy_id, charge.room_id, _charge_bill_month(charge))
             for charge in charges
@@ -1098,12 +1277,6 @@ def _validate_bill_charge_group(charges):
     elif directions == {Charge.Direction.EXPENSE}:
         if len(charges) != 1:
             raise ValueError("待付账单请逐笔处理。")
-        if charges[0].category not in {
-            Charge.Category.COMMISSION,
-            Charge.Category.DEPOSIT_REFUND,
-            Charge.Category.PROPERTY_RENT,
-        }:
-            raise ValueError("这笔费用不属于固定待付账单。")
     else:
         raise ValueError("应收和应付账单不能合并处理。")
 
@@ -1175,7 +1348,7 @@ def bill_payment_edit(request, pk):
         _validate_bill_charge_group(charges)
     except ValueError as exc:
         messages.error(request, f"{exc} 请到流水页面修改。")
-        return redirect("charge_list")
+        return _finish(request, "charge_list")
     maximum = money(sum((charge.balance for charge in charges), Decimal("0.00")) + payment.allocated_amount)
     if request.method == "POST":
         form = BillPaymentEditForm(request.POST, maximum=maximum)
@@ -1224,7 +1397,7 @@ def property_rent_rule_create(request):
             rule = form.save()
             generate_property_rent_charges_until(rule, scheduled_due_through_date())
             messages.success(request, "已新增产权方房租规则并生成对应待付账单。")
-            return redirect("property_rent_rule_list")
+            return _finish(request, "property_rent_rule_list")
     else:
         form = PropertyRentRuleForm(
             initial={
@@ -1256,7 +1429,7 @@ def property_rent_rule_edit(request, pk):
             clear_unpaid_property_rent_charges(rule)
             generate_property_rent_charges_until(rule, scheduled_due_through_date())
             messages.success(request, "已更新产权方房租规则和未付款账单。")
-            return redirect("property_rent_rule_list")
+            return _finish(request, "property_rent_rule_list")
     else:
         form = PropertyRentRuleForm(instance=rule)
     return render(
@@ -1277,7 +1450,7 @@ def property_rent_rule_delete(request, pk):
     clear_unpaid_property_rent_charges(rule)
     rule.delete()
     messages.success(request, "已删除产权方房租规则；已付款历史账单保留。")
-    return redirect("property_rent_rule_list")
+    return _finish(request, "property_rent_rule_list")
 
 
 @require_POST
@@ -1303,9 +1476,18 @@ def collection_collect(request, pk):
 
 
 def charge_list(request):
-    status = request.GET.get("status", "all")
+    status = request.GET.get("status", "payments")
+    q = request.GET.get("q", "").strip()
+    month = request.GET.get("month", "")
     charges = Charge.objects.select_related("room", "person", "tenancy").all()
-    payments = Payment.objects.select_related("room", "person", "tenancy").all()
+    payments = Payment.objects.select_related("room", "person", "tenancy").prefetch_related("allocations__charge").all()
+    if q:
+        charges = charges.filter(Q(room__number__icontains=q) | Q(person__name__icontains=q) | Q(description__icontains=q))
+        payments = payments.filter(Q(room__number__icontains=q) | Q(person__name__icontains=q) | Q(memo__icontains=q))
+    if month:
+        start, end = _month_bounds(month)
+        payments = payments.filter(date__range=(start, end))
+        charges = charges.filter(due_date__range=(start, end))
     if status == "open":
         charges = charges.exclude(status__in=[Charge.Status.PAID, Charge.Status.VOID])
         payments = Payment.objects.none()
@@ -1320,7 +1502,7 @@ def charge_list(request):
     return render(
         request,
         "core/charge_list.html",
-        {"ledger_rows": _ledger_rows(charges, payments, sort_by="room"), "status": status},
+        {"ledger_rows": _ledger_rows(charges, payments, reverse=True), "status": status, "q": q, "month": month, "income_total": money(sum((p.amount for p in payments if p.direction == Payment.Direction.RECEIVE), Decimal("0.00"))), "expense_total": money(sum((p.amount for p in payments if p.direction == Payment.Direction.PAY), Decimal("0.00")))},
     )
 
 
@@ -1347,10 +1529,10 @@ def charge_create(request):
                     room=room,
                     person=tenancy.primary_person if tenancy else None,
                     memo=description if not cd["notes"] else f"{description}：{cd['notes']}",
-                    auto_allocate=True,
+                    auto_allocate=cd["direction"] == Payment.Direction.RECEIVE,
                 )
                 messages.success(request, f"已记录{payment.get_direction_display()}款 {payment.amount}。")
-                return redirect("room_detail", pk=room.pk) if room else redirect("dashboard")
+                return _finish(request, "room_detail", pk=room.pk) if room else _finish(request, "dashboard")
             charge = Charge.objects.create(
                 direction=cd["direction"],
                 category=cd["category"],
@@ -1366,13 +1548,13 @@ def charge_create(request):
             allocate_unallocated_payments()
             charge.refresh_from_db()
             messages.success(request, "已新增待处理账单。")
-            return redirect("room_detail", pk=charge.room_id) if charge.room_id else redirect("charge_list")
+            return _finish(request, "room_detail", pk=charge.room_id) if charge.room_id else _finish(request, "charge_list")
     else:
-        initial = {"date": timezone.localdate(), "direction": Charge.Direction.INCOME}
+        initial = {"date": timezone.localdate(), "direction": request.GET.get("direction", Charge.Direction.INCOME)}
         if room_id := request.GET.get("room"):
             initial["room"] = room_id
         form = ManualChargeForm(initial=initial)
-    return render(request, "core/form_page.html", {"form": form, "title": "新增账单", "submit_label": "保存账单"})
+    return render(request, "core/form_page.html", {"form": form, "title": "增加待收 / 待付", "submit_label": "保存待收付", "form_note": "用于尚未实际收付的钱。已经发生的收支请使用“收款”或“记支出”。"})
 
 
 def charge_edit(request, pk):
@@ -1381,17 +1563,18 @@ def charge_edit(request, pk):
         form = ChargeEditForm(request.POST, instance=charge)
         if form.is_valid():
             charge = form.save(commit=False)
-            if charge.room_id:
+            if charge.room_id and (not charge.tenancy_id or charge.tenancy.room_id != charge.room_id):
                 tenancy = charge.room.active_tenancy(charge.due_date)
                 charge.tenancy = tenancy
                 charge.person = tenancy.primary_person if tenancy else None
-            else:
+            elif not charge.room_id:
                 charge.tenancy = None
                 charge.person = None
+            charge.source = Charge.Source.MANUAL
             charge.save()
             charge.refresh_status()
             messages.success(request, "已更新账单。")
-            return redirect("room_detail", pk=charge.room_id) if charge.room_id else redirect("charge_list")
+            return _finish(request, "room_detail", pk=charge.room_id) if charge.room_id else _finish(request, "charge_list")
     else:
         form = ChargeEditForm(instance=charge)
     return render(request, "core/form_page.html", {"form": form, "title": "修改账单", "submit_label": "保存账单"})
@@ -1406,8 +1589,13 @@ def charge_delete(request, pk):
         if room_id:
             return _redirect_back(request, "room_detail", pk=room_id)
         return _redirect_back(request, "charge_list")
-    charge.delete()
-    messages.success(request, "已删除账单。")
+    if charge.generated_key:
+        charge.status = Charge.Status.VOID
+        charge.save(update_fields=["status"])
+        messages.success(request, "已作废自动账单，刷新后不会重新生成。")
+    else:
+        charge.delete()
+        messages.success(request, "已删除账单。")
     if room_id:
         return _redirect_back(request, "room_detail", pk=room_id)
     return _redirect_back(request, "charge_list")
@@ -1420,39 +1608,47 @@ def move_tenancy_view(request, pk):
         form = MoveRoomForm(request.POST)
         if form.is_valid():
             cd = form.cleaned_data
-            move_tenancy(
-                tenancy,
-                new_room=cd["new_room"],
-                move_date=cd["move_date"],
-                new_monthly_rent=cd["new_monthly_rent"],
-                manual_diff_amount=cd["manual_diff_amount"],
-                note=cd["note"],
-            )
-            messages.success(request, "已记录换房并生成补差账单。")
-            return redirect("tenancy_list")
+            try:
+                move_tenancy(
+                    tenancy,
+                    new_room=cd["new_room"],
+                    move_date=cd["move_date"],
+                    new_monthly_rent=cd["new_monthly_rent"],
+                    manual_diff_amount=cd["manual_diff_amount"],
+                    note=cd["note"],
+                )
+            except ValueError as exc:
+                form.add_error(None, str(exc))
+            else:
+                messages.success(request, "已记录换房并生成补差账单。")
+                return _finish(request, "tenancy_list")
     else:
         form = MoveRoomForm(initial={"move_date": timezone.localdate(), "new_monthly_rent": tenancy.monthly_rent})
     return render(
         request,
         "core/form_page.html",
-        {"form": form, "title": f"{tenancy.room.number} {tenancy.primary_person.name} 换房", "submit_label": "保存换房"},
+        {"form": form, "title": f"{tenancy.room.number} {tenancy.primary_person.name} 换房", "submit_label": "保存换房", "move_rent": tenancy.monthly_rent},
     )
 
 
 def checkout_tenancy_view(request, pk):
     tenancy = get_object_or_404(Tenancy.objects.select_related("room", "primary_person"), pk=pk)
+    if tenancy.status != Tenancy.Status.ACTIVE or Tenancy.objects.filter(previous_tenancy=tenancy).exists():
+        messages.error(request, "合同已结束或已安排续租；如需退租，请先取消未生效的续租合同。")
+        return _finish(request, "tenancy_list")
+    finance = tenancy_finances(tenancy)
     planned_initial = {
         "planned_move_out_date": tenancy.planned_move_out_date or timezone.localdate(),
         "planned_deposit_refund_amount": tenancy.planned_deposit_refund_amount
         if tenancy.planned_deposit_refund_amount is not None
-        else tenancy.deposit_amount,
+        else finance["deposit_held"],
         "note": tenancy.planned_move_out_note,
     }
     actual_initial = {
         "checkout_date": tenancy.planned_move_out_date or timezone.localdate(),
         "refund_deposit_amount": tenancy.planned_deposit_refund_amount
         if tenancy.planned_deposit_refund_amount is not None
-        else Decimal("3500.00"),
+        else finance["deposit_held"],
         "note": tenancy.planned_move_out_note,
     }
     if request.method == "POST":
@@ -1460,10 +1656,13 @@ def checkout_tenancy_view(request, pk):
         if action == "cancel_plan":
             cancel_planned_checkout(tenancy)
             messages.success(request, "已取消预计退租。")
-            return redirect("room_detail", pk=tenancy.room_id)
+            return _finish(request, "room_detail", pk=tenancy.room_id)
         if action == "actual":
             actual_form = CheckoutForm(request.POST)
             plan_form = PlannedCheckoutForm(initial=planned_initial, tenancy=tenancy)
+            actual_form.is_valid()
+            if actual_form.cleaned_data.get("checkout_date") and actual_form.cleaned_data["checkout_date"] < tenancy.start_date:
+                actual_form.add_error("checkout_date", "退租日期不能早于合同开始日期。")
             if actual_form.is_valid():
                 cd = actual_form.cleaned_data
                 checkout_tenancy(
@@ -1474,7 +1673,7 @@ def checkout_tenancy_view(request, pk):
                     note=cd["note"],
                 )
                 messages.success(request, "已确认实际退租，人员会从警务报备导出中移除。")
-                return redirect("room_detail", pk=tenancy.room_id)
+                return _finish(request, "room_detail", pk=tenancy.room_id)
         else:
             plan_form = PlannedCheckoutForm(request.POST, tenancy=tenancy)
             actual_form = CheckoutForm(initial=actual_initial)
@@ -1487,14 +1686,14 @@ def checkout_tenancy_view(request, pk):
                     note=cd["note"],
                 )
                 messages.success(request, "已保存预计退租，合同仍保持在租，警务报备不会提前移除。")
-                return redirect("room_detail", pk=tenancy.room_id)
+                return _finish(request, "room_detail", pk=tenancy.room_id)
     else:
         plan_form = PlannedCheckoutForm(initial=planned_initial, tenancy=tenancy)
         actual_form = CheckoutForm(initial=actual_initial)
     return render(
         request,
         "core/checkout_tenancy.html",
-        {"tenancy": tenancy, "plan_form": plan_form, "actual_form": actual_form},
+        {"tenancy": tenancy, "plan_form": plan_form, "actual_form": actual_form, "finance": finance},
     )
 
 
@@ -1512,22 +1711,252 @@ def visitor_stay_create(request):
                 notes=cd["notes"],
             )
             messages.success(request, f"已记录暂住：{stay.room.number} {stay.person.name}。")
-            return redirect("person_list")
+            return _finish(request, "person_list")
     else:
-        initial = {"start_date": timezone.localdate(), "end_date": timezone.localdate()}
+        initial = {}
         if room_id := request.GET.get("room"):
             initial["room"] = room_id
         form = VisitorStayForm(initial=initial)
     return render(request, "core/form_page.html", {"form": form, "title": "记录暂住/探望", "submit_label": "保存入住"})
 
 
+@transaction.atomic
+def _create_police_export(request):
+    refresh_all_room_statuses()
+    today = timezone.localdate()
+    rows = police_report_rows(today)
+    snapshot = police_report_snapshot(rows)
+    report = PoliceReportExport.objects.create(report_date=today, rows=snapshot)
+    # Failed serialization rolls back the batch; departures remain pending.
+    response = export_police_report(today, snapshot=snapshot, report_id=report.pk)
+    request.session["police_fingerprint"] = police_fingerprint(rows)
+    request.session["police_export_time"] = timezone.localtime().strftime("%Y-%m-%d %H:%M")
+    response["Cache-Control"] = "no-store"
+    return report, response
+
+
 def police_export_view(request):
-    return export_police_report()
+    try:
+        _, response = _create_police_export(request)
+    except ValidationError:
+        messages.error(request, "报备内容有待修正，请在预览中查看提示并修改对应人员。")
+        return redirect("police_preview")
+    return response
+
+
+@transaction.atomic
+def police_preview(request):
+    refresh_all_room_statuses()
+    rows = police_report_rows(include_excluded=True)
+    initial = [{"stay_id": row["stay"].pk,
+                "departure_token": str(row["stay"].police_departure_token or ""),
+                "text": row["text"],
+                "report_departure": "yes" if row["included"] else "no"} for row in rows]
+    RowFormSet = formset_factory(PoliceReportRowForm, extra=0, min_num=len(rows), max_num=len(rows),
+                                validate_min=True, validate_max=True)
+    editing = request.method == "POST" and ("form-TOTAL_FORMS" in request.POST or "action" in request.POST)
+    formset = RowFormSet(request.POST if editing else None, initial=initial)
+    ready = True
+    if editing:
+        ready = formset.is_valid()
+        if ready:
+            ready = all(form.cleaned_data["stay_id"] == item["stay_id"]
+                        and form.cleaned_data["departure_token"] == item["departure_token"]
+                        and (not row["departed"] or form.cleaned_data["report_departure"] in {"yes", "no"})
+                        for form, item, row in zip(formset, initial, rows))
+            if not ready:
+                messages.error(request, "人员或退租状态已变化，请重新打开预览后调整并保存。")
+        if ready:
+            for form, row in zip(formset, rows):
+                stay = row["stay"]
+                text = form.cleaned_data["text"]
+                override = stay.police_report_text_override if text == row["text"] else text
+                Stay.objects.filter(pk=stay.pk).update(
+                    police_report_text_override=override,
+                    police_departure_required=form.cleaned_data["report_departure"] == "yes" if row["departed"] else True,
+                )
+            messages.success(request, "已保存报备内容和退租报备选择。")
+            if request.POST.get("action") == "save":
+                return redirect("police_preview")
+    if request.method == "POST" and ready:
+        try:
+            report, _ = _create_police_export(request)
+        except ValidationError:
+            messages.error(request, "报备内容有待修正，请修改下方提示。")
+        else:
+            return redirect(f"{reverse('police_report_detail', args=[report.pk])}?download=1")
+    for row, form in zip(rows, formset):
+        row["form"] = form
+    selected_rows = [row for row in rows if row["included"]]
+    return render(request, "core/police_preview.html", {
+        "report_rows": rows, "report_count": len(selected_rows), "formset": formset,
+        "current_count": sum(not r["departed"] for r in rows),
+        "departure_count": sum(r["departed"] for r in selected_rows),
+        "excluded_count": sum(not r["included"] for r in rows),
+        "can_export": not any(r["errors"] for r in selected_rows),
+        "recent_reports": PoliceReportExport.objects.all()[:10],
+    })
+
+
+def police_report_detail(request, pk):
+    report = get_object_or_404(PoliceReportExport, pk=pk)
+    return render(request, "core/police_report_detail.html", {
+        "report": report, "auto_download": request.GET.get("download") == "1",
+    })
+
+
+def police_report_download(request, pk):
+    report = get_object_or_404(PoliceReportExport, pk=pk)
+    response = export_police_report(report.report_date, snapshot=report.rows, report_id=report.pk)
+    response["Cache-Control"] = "no-store"
+    return response
+
+
+@require_POST
+@transaction.atomic
+def police_report_confirm(request, pk):
+    report = get_object_or_404(PoliceReportExport.objects.select_for_update(), pk=pk)
+    if not report.sent_at:
+        report.sent_at = timezone.now()
+        for row in report.rows:
+            if row["departure_token"]:
+                Stay.objects.filter(pk=row["stay_id"], is_active=False,
+                                    police_departure_token=row["departure_token"],
+                                    police_departure_reported_at__isnull=True).update(police_departure_reported_at=report.sent_at)
+        report.save(update_fields=["sent_at"])
+        messages.success(request, "已确认本次报备已发送；本次已报备的退租事件不再重复，之后新增或修正的退租仍会保留。")
+    return redirect("police_report_detail", pk=report.pk)
+
+def _agent_image_options(request):
+    return {name: request.GET.get(name, "1") == "1" for name in ("include_commission", "include_password")}
 
 
 def agent_export_view(request):
-    return export_agent_room_status()
+    response = export_agent_room_status(**_agent_image_options(request))
+    if request.GET.get("preview") == "1":
+        response["Content-Disposition"] = "inline"
+    response["Cache-Control"] = "no-store"
+    return response
 
 
 def template_export_view(request):
     return export_import_template()
+
+
+def _filter_bills(charges, category, q, timing, room_id):
+    today = timezone.localdate()
+    fixed = {Charge.Category.COMMISSION, Charge.Category.DEPOSIT_REFUND, Charge.Category.PROPERTY_RENT}
+    if category == "regular": charges = [c for c in charges if c.category in {Charge.Category.RENT, Charge.Category.HEATING}]
+    elif category == "fixed": charges = [c for c in charges if c.category in fixed]
+    elif category in Charge.Category.values: charges = [c for c in charges if c.category == category]
+    if room_id: charges = [c for c in charges if str(c.tenancy.room_id if c.tenancy else c.room_id) == room_id]
+    if q: charges = [c for c in charges if q.casefold() in f"{c.room.number if c.room else ''} {c.person.name if c.person else ''} {c.description}".casefold()]
+    if timing == "overdue": charges = [c for c in charges if c.due_date < today and c.balance > 0]
+    elif timing == "due": charges = [c for c in charges if c.due_date <= today and c.balance > 0]
+    elif timing == "future": charges = [c for c in charges if c.due_date > today and c.balance > 0]
+    return charges
+
+
+def renewal_view(request, pk):
+    tenancy = get_object_or_404(Tenancy, pk=pk, status=Tenancy.Status.ACTIVE)
+    form = RenewalForm(request.POST if request.method == "POST" else None, initial={"monthly_rent": tenancy.monthly_rent, "payment_cycle": tenancy.payment_cycle})
+    if request.method == "POST" and form.is_valid():
+        try:
+            renewed = renew_tenancy(tenancy, **form.cleaned_data)
+        except ValueError as exc:
+            form.add_error(None, str(exc))
+        else:
+            messages.success(request, f"已办理续租，{renewed.start_date:%Y-%m-%d} 起执行新合同；押金和原欠款继续保留。")
+            return _finish(request, "tenancy_list")
+    return render(request, "core/form_page.html", {"form": form, "title": f"{tenancy.room.number} {tenancy.primary_person.name} 续租", "submit_label": "确认续租", "form_note": f"新合同从 {tenancy.end_date + timedelta(days=1):%Y-%m-%d} 开始。原合同保留，押金沿用，不重复收费。"})
+
+
+def police_fingerprint(report_rows=None):
+    rows = [(r["stay"].pk, r["stay"].person.name, r["stay"].person.id_number,
+             r["stay"].room.number, r["stay"].person.phone, r["stay"].person.emergency_name,
+             r["stay"].person.emergency_phone, r["text"], r["errors"], r["stay"].police_departure_token)
+            for r in (police_report_rows() if report_rows is None else report_rows)]
+    return hashlib.sha256(json.dumps(rows, default=str, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def more_view(request):
+    return render(request, "core/more.html")
+
+
+def agent_preview(request):
+    options = _agent_image_options(request)
+    context = agent_room_status_data(**options)
+    context.update(options)
+    query = "&".join(f"{name}={int(value)}" for name, value in options.items())
+    context["agent_image_url"] = f"{reverse('export_agent_rooms')}?{query}"
+    return render(request, "core/agent_preview.html", context)
+
+
+@transaction.atomic
+def agent_settings_view(request):
+    settings = ApartmentSettings.objects.filter(pk=1).first()
+    defaults = dict(settings.fee_defaults) if settings else {}
+    public_fees = defaults.get("agent_fees", {})
+    initial = {f"agent_{name}": value for name, value in public_fees.items()}
+    initial.setdefault("agent_parking_fee", "150")
+    initial.setdefault("agent_parking_annual_fee", "1440")
+    data = request.POST if request.method == "POST" else None
+    form = AgentFeesForm(data, initial=initial)
+    PriceFormSet = modelformset_factory(Room, form=RoomListingPriceForm, extra=0, edit_only=True)
+    prices = PriceFormSet(data, queryset=Room.objects.order_by("number"), prefix="prices")
+    if request.method == "POST":
+        fees_valid = form.is_valid()
+        prices_valid = prices.is_valid()
+        if fees_valid and prices_valid:
+            defaults["agent_fees"] = {name.removeprefix("agent_"): str(value) for name, value in form.cleaned_data.items() if value not in (None, "")}
+            defaults["agent_fees"].setdefault("parking_annual_fee", "")
+            ApartmentSettings.objects.update_or_create(pk=1, defaults={"fee_defaults": defaults})
+            prices.save()
+            messages.success(request, "已保存中介展示费用、房间挂牌价和佣金基数。")
+            return redirect("agent_preview")
+    for price_form in prices:
+        price_form.room_status = Room.Status(price_form.instance.refresh_status(save=False)).label
+    return render(request, "core/agent_settings.html", {"form": form, "prices": prices})
+
+
+def person_lookup(request):
+    q = request.GET.get("q", "").strip()
+    if len(q) < 2: return JsonResponse({"people": []})
+    people = Person.objects.filter(Q(name__icontains=q) | Q(phone__icontains=q) | Q(id_number__icontains=q))[:8]
+    return JsonResponse({"people": [{"id": p.pk, "name": p.name, "phone": p.phone, "id_number": p.id_number, "emergency_name": p.emergency_name, "emergency_phone": p.emergency_phone, "emergency_address": p.emergency_address} for p in people]})
+
+
+@transaction.atomic
+def common_fees_view(request):
+    settings = ApartmentSettings.objects.filter(pk=1).first()
+    initial = dict(settings.fee_defaults) if settings else {}
+    public_fees = initial.get("agent_fees", {})
+    initial.update({"agent_electricity_fee": public_fees.get("electricity_fee", ""), "agent_heating_fee": public_fees.get("heating_fee")})
+    form = CommonFeesForm(request.POST if request.method == "POST" else None, initial=initial)
+    if request.method == "POST" and form.is_valid():
+        values = {name: form.cleaned_data[name] for name in form.Meta.fields}
+        defaults = {name: str(value) for name, value in values.items()}
+        defaults["agent_fees"] = dict(public_fees)
+        for name in ("electricity_fee", "heating_fee"):
+            value = form.cleaned_data[f"agent_{name}"]
+            defaults["agent_fees"].pop(name, None)
+            if value not in (None, ""):
+                defaults["agent_fees"][name] = str(value)
+        ApartmentSettings.objects.update_or_create(pk=1, defaults={"fee_defaults": defaults})
+        count = Room.objects.update(**values) if form.cleaned_data["apply_existing"] else 0
+        messages.success(request, f"已保存新房间默认费用，并更新 {count} 间现有房间。已生成账单保持原金额。")
+        return _finish(request, "more")
+    return render(request, "core/form_page.html", {"form": form, "title": "统一房间费用", "submit_label": "保存费用标准", "form_note": "默认用于以后新增的房间；勾选后也应用到全部现有房间。"})
+
+
+def contract_preview(request):
+    form = SignContractForm(request.GET, room_queryset=Room.objects.all())
+    form.is_valid()
+    cd = form.cleaned_data
+    if any(name not in cd for name in ["room", "start_date", "end_date", "monthly_rent", "deposit_amount", "payment_cycle"]) or cd["end_date"] < cd["start_date"]:
+        return JsonResponse({"error": "请填写有效的租期、月租与押金。"}, status=400)
+    months = {"monthly": 1, "quarterly": 3, "half_year": 6, "yearly": 12}[cd["payment_cycle"]]
+    short = contract_months(cd["start_date"], cd["end_date"]) < 6
+    rent = cd["monthly_rent"] * months if short else long_term_first_rent(cd["monthly_rent"], cd["start_date"])
+    rent = max(money(rent - (cd.get("first_month_discount") or 0)), Decimal("0.00"))
+    return JsonResponse({"rent": str(rent), "deposit": str(cd["deposit_amount"]), "subtotal": str(money(rent + cd["deposit_amount"])), "note": "房租和押金小计；取暖费按入住日期另计，保存后可查看完整账单。"})

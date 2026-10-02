@@ -1,5 +1,6 @@
 from datetime import date, timedelta
 from decimal import Decimal
+from uuid import uuid4
 
 from django.db import transaction
 from django.db.models import Q
@@ -19,6 +20,7 @@ CYCLE_MONTHS = {
 
 def refresh_all_room_statuses(today=None):
     today = today or timezone.localdate()
+    activate_renewals(today)
     for room in Room.objects.all():
         room.refresh_status(today=today)
 
@@ -58,6 +60,10 @@ def create_charge(
         charge, created = Charge.objects.get_or_create(generated_key=generated_key, defaults=payload)
         if created:
             return charge
+        if direction == Charge.Direction.INCOME:
+            return charge
+        if charge.source != Charge.Source.AUTO or charge.allocations.exists() or charge.status == Charge.Status.VOID:
+            return charge
         changed_fields = []
         foreign_keys = {"tenancy", "room", "person"}
         for field, value in payload.items():
@@ -84,7 +90,7 @@ def commission_due_date_for_tenancy(tenancy):
 
 
 def create_commission_charge(tenancy):
-    if not tenancy.broker:
+    if not tenancy.billing_enabled or not tenancy.broker:
         return None
     due_date = tenancy.commission_due_date or commission_due_date_for_tenancy(tenancy)
     if tenancy.commission_due_date != due_date:
@@ -104,6 +110,8 @@ def create_commission_charge(tenancy):
 
 
 def create_initial_charges(tenancy, first_month_discount=Decimal("0.00")):
+    if not tenancy.billing_enabled:
+        return None, None
     deposit = create_charge(
         direction=Charge.Direction.INCOME,
         category=Charge.Category.DEPOSIT,
@@ -147,6 +155,7 @@ def create_initial_charges(tenancy, first_month_discount=Decimal("0.00")):
         period_start=tenancy.start_date,
         period_end=period_end,
         generated_key=f"tenancy:{tenancy.id}:rent:{tenancy.start_date:%Y%m%d}",
+        source=Charge.Source.ADJUSTMENT if discount else Charge.Source.AUTO,
     )
     return deposit, rent
 
@@ -165,7 +174,12 @@ def sign_contract(
     commission_manual_amount=None,
     first_month_discount=Decimal("0.00"),
     notes="",
+    received_amount=None,
+    roommates=None,
 ):
+    room = Room.objects.select_for_update().get(pk=room.pk)
+    if room.tenancies.filter(status__in=[Tenancy.Status.ACTIVE, Tenancy.Status.UPCOMING]).exists():
+        raise ValueError("该房间已有未结束的合同，不能重复办理入住。")
     person, _ = Person.objects.update_or_create(
         id_number=person_data["id_number"],
         defaults={
@@ -205,9 +219,14 @@ def sign_contract(
             "is_active": True,
         },
     )
+    for data in roommates or []:
+        roommate, _ = Person.objects.update_or_create(id_number=data["id_number"], defaults={key: value for key, value in data.items() if key != "id_number"})
+        Stay.objects.create(tenancy=tenancy, person=roommate, room=room, start_date=start_date, end_date=end_date, stay_type=Stay.Type.PERMANENT)
     create_initial_charges(tenancy, first_month_discount=first_month_discount)
     generate_heating_charges_until(tenancy, month_end(start_date))
     create_commission_charge(tenancy)
+    if received_amount:
+        record_payment(direction=Payment.Direction.RECEIVE, date=timezone.localdate(), amount=received_amount, tenancy=tenancy, memo="办理入住时收款")
     allocate_unallocated_payments()
     room.refresh_status(today=start_date)
     return tenancy
@@ -238,7 +257,31 @@ def generate_scheduled_due_charges(today=None):
     return generate_due_charges(scheduled_due_through_date(today))
 
 
+def rent_charge_spec(tenancy, period_start, *, first_month=False):
+    """Describe a rent bill without writing it, using the existing billing rules."""
+    months = CYCLE_MONTHS.get(tenancy.payment_cycle, 1)
+    if tenancy.is_short_term:
+        period_end = min(add_months(period_start, months) - timedelta(days=1), tenancy.end_date)
+        amount = tenancy.monthly_rent * Decimal(months)
+        description = f"{tenancy.room.number} {period_start:%Y.%m.%d}-{period_end:%Y.%m.%d} 房租"
+        suffix = f"{period_start:%Y%m%d}"
+    else:
+        period_end = min(month_end(period_start), tenancy.end_date)
+        amount = long_term_first_rent(tenancy.monthly_rent, period_start) if first_month else tenancy.monthly_rent
+        description = f"{tenancy.room.number} 首月房租" if first_month else f"{tenancy.room.number} {period_start:%Y.%m} 房租"
+        suffix = f"{period_start:%Y%m%d}" if first_month else f"{period_start:%Y%m}"
+    return dict(
+        direction=Charge.Direction.INCOME, category=Charge.Category.RENT,
+        due_date=period_start if tenancy.is_short_term or first_month else period_start - timedelta(days=1),
+        amount=money(amount), description=description, tenancy=tenancy,
+        period_start=period_start, period_end=period_end,
+        generated_key=f"tenancy:{tenancy.id}:rent:{suffix}",
+    )
+
+
 def generate_rent_charges_until(tenancy, through_date=None):
+    if not tenancy.billing_enabled:
+        return []
     through_date = through_date or timezone.localdate()
     through_date = min(through_date, billing_end_for_tenancy(tenancy))
     billing_start = tenancy.billing_start_date or tenancy.start_date
@@ -250,52 +293,18 @@ def generate_rent_charges_until(tenancy, through_date=None):
         while add_months(cursor, months) <= billing_start:
             cursor = add_months(cursor, months)
         while cursor <= through_date:
-            period_end = min(add_months(cursor, months) - timedelta(days=1), tenancy.end_date)
-            charge = create_charge(
-                direction=Charge.Direction.INCOME,
-                category=Charge.Category.RENT,
-                due_date=cursor,
-                amount=tenancy.monthly_rent * Decimal(months),
-                description=f"{tenancy.room.number} {cursor:%Y.%m.%d}-{period_end:%Y.%m.%d} 房租",
-                tenancy=tenancy,
-                period_start=cursor,
-                period_end=period_end,
-                generated_key=f"tenancy:{tenancy.id}:rent:{cursor:%Y%m%d}",
-            )
+            charge = create_charge(**rent_charge_spec(tenancy, cursor))
             created.append(charge)
             cursor = add_months(cursor, months)
         return created
 
     if billing_start <= tenancy.start_date:
-        first_period_end = month_end(tenancy.start_date)
-        create_charge(
-            direction=Charge.Direction.INCOME,
-            category=Charge.Category.RENT,
-            due_date=tenancy.start_date,
-            amount=long_term_first_rent(tenancy.monthly_rent, tenancy.start_date),
-            description=f"{tenancy.room.number} 首月房租",
-            tenancy=tenancy,
-            period_start=tenancy.start_date,
-            period_end=first_period_end,
-            generated_key=f"tenancy:{tenancy.id}:rent:{tenancy.start_date:%Y%m%d}",
-        )
+        create_charge(**rent_charge_spec(tenancy, tenancy.start_date, first_month=True))
         cursor = next_natural_month_start(tenancy.start_date)
     else:
         cursor = date(billing_start.year, billing_start.month, 1)
     while cursor <= through_date:
-        period_end = min(month_end(cursor), tenancy.end_date)
-        due_date = cursor - timedelta(days=1)
-        charge = create_charge(
-            direction=Charge.Direction.INCOME,
-            category=Charge.Category.RENT,
-            due_date=due_date,
-            amount=tenancy.monthly_rent,
-            description=f"{tenancy.room.number} {cursor:%Y.%m} 房租",
-            tenancy=tenancy,
-            period_start=cursor,
-            period_end=period_end,
-            generated_key=f"tenancy:{tenancy.id}:rent:{cursor:%Y%m}",
-        )
+        charge = create_charge(**rent_charge_spec(tenancy, cursor))
         created.append(charge)
         cursor = next_natural_month_start(cursor)
     return created
@@ -311,6 +320,8 @@ def heating_cycle_starts(year):
 
 
 def generate_heating_charges_until(tenancy, through_date=None):
+    if not tenancy.billing_enabled:
+        return []
     through_date = through_date or timezone.localdate()
     active_start = max(tenancy.start_date, tenancy.billing_start_date or tenancy.start_date)
     active_end = billing_end_for_tenancy(tenancy)
@@ -401,8 +412,9 @@ def clear_unpaid_property_rent_charges(rule):
 
 def generate_due_charges(through_date=None):
     through_date = through_date or timezone.localdate()
+    activate_renewals(timezone.localdate())
     created = []
-    qs = Tenancy.objects.filter(status=Tenancy.Status.ACTIVE, start_date__lte=through_date)
+    qs = Tenancy.objects.filter(status=Tenancy.Status.ACTIVE, start_date__lte=through_date, billing_enabled=True)
     for tenancy in qs.select_related("room", "primary_person", "broker"):
         created.extend(generate_rent_charges_until(tenancy, through_date))
         created.extend(generate_heating_charges_until(tenancy, through_date))
@@ -416,7 +428,7 @@ def generate_due_charges(through_date=None):
     ):
         created.extend(generate_property_rent_charges_until(rule, through_date))
     allocate_unallocated_payments()
-    refresh_all_room_statuses(through_date)
+    refresh_all_room_statuses(timezone.localdate())
     return created
 
 
@@ -434,6 +446,8 @@ def remove_unpaid_auto_income_after(tenancy, cutoff_date):
 
 
 def allocation_candidates(payment):
+    if not payment.auto_allocate:
+        return []
     charge_direction = (
         Charge.Direction.INCOME
         if payment.direction == Payment.Direction.RECEIVE
@@ -441,7 +455,7 @@ def allocation_candidates(payment):
     )
     charges = Charge.objects.filter(direction=charge_direction).exclude(status__in=[Charge.Status.PAID, Charge.Status.VOID])
     if payment.tenancy_id:
-        charges = charges.filter(tenancy=payment.tenancy)
+        charges = charges.filter(tenancy_id__in=tenancy_family_ids(payment.tenancy))
     else:
         filters = Q()
         if payment.person_id:
@@ -449,7 +463,9 @@ def allocation_candidates(payment):
         if payment.room_id:
             filters |= Q(room=payment.room)
         if filters:
-            charges = charges.filter(filters)
+            charges = charges.filter(filters, tenancy__isnull=True)
+        else:
+            return []
     if payment.category == Payment.Category.DEPOSIT:
         if payment.direction == Payment.Direction.RECEIVE:
             charges = charges.filter(category=Charge.Category.DEPOSIT)
@@ -492,7 +508,7 @@ def allocate_payment(payment):
 
 
 def allocate_unallocated_payments():
-    for payment in Payment.objects.all().order_by("date", "id"):
+    for payment in Payment.objects.filter(auto_allocate=True).order_by("date", "id"):
         if payment.unallocated_amount > 0:
             allocate_payment(payment)
 
@@ -509,10 +525,74 @@ def record_payment(*, direction, date, amount, tenancy=None, room=None, person=N
         person=person or (tenancy.primary_person if tenancy else None),
         method=method,
         memo=memo,
+        auto_allocate=auto_allocate,
     )
     if auto_allocate:
         allocate_payment(payment)
     return payment
+
+
+def tenancy_family_ids(tenancy):
+    """同一次居住的续租链，旧欠款和押金继续归属于原租客。"""
+    while tenancy.previous_tenancy_id:
+        tenancy = tenancy.previous_tenancy
+    ids = [tenancy.pk]
+    while (tenancy := Tenancy.objects.filter(previous_tenancy_id=ids[-1]).first()) is not None:
+        ids.append(tenancy.pk)
+    return ids
+
+
+def tenancy_finances(tenancy):
+    ids = tenancy_family_ids(tenancy)
+    charges = list(Charge.objects.filter(tenancy_id__in=ids).exclude(status=Charge.Status.VOID).prefetch_related("allocations"))
+    payments = list(Payment.objects.filter(tenancy_id__in=ids, direction=Payment.Direction.RECEIVE, auto_allocate=True).prefetch_related("allocations"))
+    deposit_received = sum((c.allocated_amount for c in charges if c.direction == Charge.Direction.INCOME and c.category == Charge.Category.DEPOSIT), Decimal("0.00"))
+    deposit_refunded = sum((c.allocated_amount for c in charges if c.direction == Charge.Direction.EXPENSE and c.category == Charge.Category.DEPOSIT_REFUND), Decimal("0.00"))
+    return {
+        "deposit_received": money(deposit_received),
+        "deposit_held": max(money(deposit_received - deposit_refunded), Decimal("0.00")),
+        "due": money(sum((c.balance for c in charges if c.direction == Charge.Direction.INCOME and c.due_date <= timezone.localdate()), Decimal("0.00"))),
+        "prepaid": money(sum((p.unallocated_amount for p in payments), Decimal("0.00"))),
+    }
+
+
+@transaction.atomic
+def activate_renewals(today):
+    for tenancy in Tenancy.objects.select_for_update().filter(previous_tenancy__isnull=True, status=Tenancy.Status.UPCOMING, start_date__lte=today):
+        tenancy.status = Tenancy.Status.ACTIVE
+        tenancy.save(update_fields=["status"])
+    for tenancy in Tenancy.objects.select_for_update().filter(previous_tenancy__isnull=False, status=Tenancy.Status.UPCOMING, start_date__lte=today).select_related("previous_tenancy").order_by("start_date"):
+        previous = tenancy.previous_tenancy
+        if previous.status != Tenancy.Status.ACTIVE:
+            continue
+        previous.status = Tenancy.Status.ENDED
+        previous.save(update_fields=["status"])
+        tenancy.status = Tenancy.Status.ACTIVE
+        tenancy.save(update_fields=["status"])
+        for stay in previous.stays.filter(is_active=True):
+            # A renewal ends the old record, but the person has not left.
+            Stay.objects.filter(pk=stay.pk).update(is_active=False, end_date=previous.end_date)
+            Stay.objects.create(person=stay.person, room=tenancy.room, tenancy=tenancy, stay_type=stay.stay_type, start_date=tenancy.start_date, end_date=tenancy.end_date, report_note="", notes=stay.notes)
+
+
+@transaction.atomic
+def renew_tenancy(tenancy, *, end_date, monthly_rent, payment_cycle, note=""):
+    tenancy = Tenancy.objects.select_for_update().get(pk=tenancy.pk)
+    if tenancy.status != Tenancy.Status.ACTIVE or Tenancy.objects.filter(previous_tenancy=tenancy).exists():
+        raise ValueError("该合同已结束或已经办理续租。")
+    if tenancy.planned_move_out_date:
+        raise ValueError("请先取消预计退租，再办理续租。")
+    start_date = tenancy.end_date + timedelta(days=1)
+    if end_date < start_date:
+        raise ValueError("续租结束日期必须晚于原合同结束日期。")
+    renewed = Tenancy.objects.create(previous_tenancy=tenancy, room=tenancy.room, primary_person=tenancy.primary_person, start_date=start_date, end_date=end_date, billing_start_date=start_date, billing_enabled=tenancy.billing_enabled, monthly_rent=monthly_rent, payment_cycle=payment_cycle, deposit_amount=tenancy.deposit_amount, status=Tenancy.Status.UPCOMING, notes=note)
+    activate_renewals(timezone.localdate())
+    renewed.refresh_from_db()
+    if renewed.status == Tenancy.Status.ACTIVE:
+        generate_rent_charges_until(renewed, scheduled_due_through_date())
+        generate_heating_charges_until(renewed, scheduled_due_through_date())
+        allocate_unallocated_payments()
+    return renewed
 
 
 def payment_category_for_charge(charge):
@@ -527,8 +607,8 @@ def settlement_priority(direction):
     if direction == Charge.Direction.INCOME:
         return {
             Charge.Category.RENT: 0,
-            Charge.Category.HEATING: 1,
-            Charge.Category.DEPOSIT: 2,
+            Charge.Category.DEPOSIT: 1,
+            Charge.Category.HEATING: 2,
         }
     return {
         Charge.Category.COMMISSION: 0,
@@ -734,7 +814,14 @@ def checkout_tenancy(tenancy, *, checkout_date, refund_deposit_amount=Decimal("0
             "updated_at",
         ]
     )
-    tenancy.stays.update(is_active=False, end_date=checkout_date)
+    Stay.objects.current(checkout_date).filter(
+        Q(tenancy=tenancy) | Q(room=tenancy.room, tenancy__isnull=True,
+                              stay_type__in=[Stay.Type.PERMANENT, Stay.Type.VISITOR])
+    ).update(
+        is_active=False, end_date=checkout_date,
+        police_departure_token=uuid4(), police_departure_reported_at=None,
+        police_departure_required=True, police_report_text_override="",
+    )
     if deposit_deduction_amount:
         Adjustment.objects.create(
             tenancy=tenancy,
@@ -777,6 +864,16 @@ def checkout_tenancy(tenancy, *, checkout_date, refund_deposit_amount=Decimal("0
 
 @transaction.atomic
 def move_tenancy(tenancy, *, new_room, move_date, new_monthly_rent, manual_diff_amount=None, note=""):
+    new_room = Room.objects.select_for_update().get(pk=new_room.pk)
+    new_room.refresh_status(today=move_date)
+    if new_room.status != Room.Status.VACANT:
+        raise ValueError("新房间当前不可入住，请重新选择空房。")
+    if tenancy.status != Tenancy.Status.ACTIVE:
+        raise ValueError("只有在租合同可以换房。")
+    if Tenancy.objects.filter(previous_tenancy=tenancy).exists():
+        raise ValueError("该合同已安排续租，请先取消未生效的续租合同。")
+    if move_date < tenancy.start_date or move_date > timezone.localdate():
+        raise ValueError("请在实际换房当天办理，日期不能早于入住或晚于今天。")
     old_room = tenancy.room
     old_rent = tenancy.monthly_rent
     remaining_days = (month_end(move_date) - move_date).days + 1
@@ -784,10 +881,10 @@ def move_tenancy(tenancy, *, new_room, move_date, new_monthly_rent, manual_diff_
     diff_amount = money(manual_diff_amount) if manual_diff_amount not in [None, ""] else calculated_diff
     if diff_amount:
         charge = create_charge(
-            direction=Charge.Direction.INCOME,
+            direction=Charge.Direction.INCOME if diff_amount > 0 else Charge.Direction.EXPENSE,
             category=Charge.Category.MOVE_DIFF,
             due_date=move_date,
-            amount=diff_amount,
+            amount=abs(diff_amount),
             description=f"{old_room.number} 换至 {new_room.number} 补差",
             tenancy=tenancy,
             room=new_room,
@@ -814,6 +911,8 @@ def move_tenancy(tenancy, *, new_room, move_date, new_monthly_rent, manual_diff_
     tenancy.notes = f"{tenancy.notes}\n{move_date:%Y-%m-%d} {old_room.number} 换至 {new_room.number}。{note}".strip()
     tenancy.save(update_fields=["room", "monthly_rent", "notes", "updated_at"])
     tenancy.stays.filter(is_active=True).update(room=new_room)
+    remove_unpaid_auto_income_after(tenancy, month_end(move_date))
+    generate_rent_charges_until(tenancy, scheduled_due_through_date(move_date))
     old_room.refresh_status(today=move_date)
     new_room.refresh_status(today=move_date)
     return tenancy

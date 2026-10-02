@@ -1,7 +1,7 @@
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
-from core.models import Adjustment, Allocation, Broker, Charge, Payment, Person, RecurringRule, Room, Stay, Tenancy
+from core.models import Adjustment, Allocation, Broker, Charge, Payment, Person, PoliceReportExport, RecurringRule, Room, Stay, Tenancy
 
 
 class Command(BaseCommand):
@@ -15,6 +15,7 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING("未执行。请加 --yes 确认清空业务数据。"))
             return
         with transaction.atomic():
+            PoliceReportExport.objects.all().delete()
             Allocation.objects.all().delete()
             Payment.objects.all().delete()
             Adjustment.objects.all().delete()
