@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from django.test import TestCase
 from django.urls import reverse
+from .test_support import configure_test_account
 
 from .exports import police_report_workbook
 from .models import ApartmentSettings, Charge, Payment, Person, Room, Stay, Tenancy
@@ -18,6 +19,7 @@ from .views import _room_finance_summary
 
 class DailyOperationsTests(TestCase):
     def setUp(self):
+        configure_test_account(self)
         self.clock = patch("django.utils.timezone.localdate", return_value=date(2026, 6, 20))
         self.clock.start()
         self.addCleanup(self.clock.stop)

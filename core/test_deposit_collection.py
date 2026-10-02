@@ -10,8 +10,12 @@ from .models import Charge, Payment, Person, Room, Tenancy
 from .services import record_payment, settle_charges, tenancy_finances
 
 
+from .test_support import configure_test_account
+
+
 class DepositCollectionTests(TestCase):
     def setUp(self):
+        configure_test_account(self)
         clock = patch("django.utils.timezone.localdate", return_value=date(2026, 10, 1))
         clock.start()
         self.addCleanup(clock.stop)

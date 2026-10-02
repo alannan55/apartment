@@ -1,0 +1,95 @@
+services:
+  app:
+    image: apartment-app:local
+    platform: linux/arm64
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DJANGO_DEBUG: "0"
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?请设置 DJANGO_SECRET_KEY}
+      DJANGO_ALLOWED_HOSTS: ${APARTMENT_DOMAIN:?请设置 APARTMENT_DOMAIN}
+      DJANGO_CSRF_TRUSTED_ORIGINS: https://${APARTMENT_DOMAIN}:${HTTPS_PORT:-8443}
+      DJANGO_HTTPS: "1"
+      APARTMENT_TRUST_PROXY: "1"
+      APARTMENT_DB_PATH: /data/db.sqlite3
+      APARTMENT_MEDIA_ROOT: /data/media
+      APARTMENT_ACCOUNTS_FILE: /config/accounts.json
+    volumes:
+      - type: bind
+        source: ${APARTMENT_STORAGE_ROOT:?请设置已经挂载的硬盘路径}/data
+        target: /data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${APARTMENT_STORAGE_ROOT}/config
+        target: /config
+        read_only: true
+        bind:
+          create_host_path: false
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 1g
+    cpus: 1.0
+    healthcheck:
+      test: [CMD, python, -c, "import os, urllib.request; r=urllib.request.Request('http://127.0.0.1:8000/health/',headers={'Host':os.environ['DJANGO_ALLOWED_HOSTS']}); urllib.request.urlopen(r,timeout=5).close()"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  gateway:
+    image: apartment-caddy:local
+    platform: linux/arm64
+    build:
+      context: .
+      dockerfile: Dockerfile.caddy
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      APARTMENT_DOMAIN: ${APARTMENT_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:?请设置 ACME_EMAIL}
+      DUCKDNS_TOKEN: ${DUCKDNS_TOKEN:?请设置 DUCKDNS_TOKEN}
+      DNS_RESOLVER: ${DNS_RESOLVER:-223.5.5.5:53}
+    ports:
+      - "${HTTPS_PORT:-8443}:8443"
+    volumes:
+      - type: bind
+        source: ./Caddyfile
+        target: /etc/caddy/Caddyfile
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${APARTMENT_STORAGE_ROOT}/caddy-data
+        target: /data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${APARTMENT_STORAGE_ROOT}/caddy-config
+        target: /config
+        bind:
+          create_host_path: false
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

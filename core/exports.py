@@ -1,4 +1,5 @@
 from io import BytesIO
+from functools import lru_cache
 from decimal import Decimal
 from pathlib import Path
 from urllib.parse import quote
@@ -203,15 +204,24 @@ def import_template_workbook():
     return workbook
 
 
-def _font(size, bold=False):
+def chinese_font_path(bold=False):
     candidates = [
+        Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc" if bold else "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
         Path(r"C:\Windows\Fonts\msyhbd.ttc" if bold else r"C:\Windows\Fonts\msyh.ttc"),
         Path(r"C:\Windows\Fonts\simhei.ttf"),
         Path(r"C:\Windows\Fonts\simsun.ttc"),
     ]
     for path in candidates:
         if path.exists():
-            return ImageFont.truetype(str(path), size)
+            return path
+    return None
+
+
+@lru_cache(maxsize=16)
+def _font(size, bold=False):
+    path = chinese_font_path(bold)
+    if path:
+        return ImageFont.truetype(str(path), size)
     return ImageFont.load_default()
 
 

@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}登录 · 悦山公寓运营{% endblock %}
+{% block content %}
+<section class="panel login-panel">
+  <h1>登录悦山运营</h1>
+  <p class="login-help">登录后维护房态、人员和账务，下载最新报表。</p>
+  <form method="post">
+    {% csrf_token %}
+    {% if login_error %}<p class="field-error" role="alert">{{ login_error }}</p>{% endif %}
+    {% if form.non_field_errors %}<div class="field-error" role="alert">{{ form.non_field_errors }}</div>{% endif %}
+    <div class="field">
+      <label for="id_username">账号</label>
+      <input id="id_username" name="username" type="text" maxlength="150" autocomplete="username" required autofocus value="{{ form.username.value|default_if_none:'' }}">
+      {{ form.username.errors }}
+    </div>
+    <div class="field">
+      <label for="id_password">密码</label>
+      <input id="id_password" name="password" type="password" autocomplete="current-password" required>
+      {{ form.password.errors }}
+    </div>
+    <input type="hidden" name="next" value="{{ next }}">
+    <button class="button primary" type="submit">登录</button>
+  </form>
+</section>
+{% endblock %}

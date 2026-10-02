@@ -6,3 +6,7 @@ db.sqlite3
 outputs/
 staticfiles/
 .env
+config/accounts.json
+deploy/r4s/.env
+media/
+data/

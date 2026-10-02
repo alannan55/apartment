@@ -10,8 +10,12 @@ from .exports import agent_room_status_data, agent_room_status_image
 from .models import ApartmentSettings, Charge, Person, Room, Tenancy
 
 
+from .test_support import configure_test_account
+
+
 class AgentDisplayTests(TestCase):
     def setUp(self):
+        configure_test_account(self)
         self.clock = patch("django.utils.timezone.localdate", return_value=date(2026, 10, 1))
         self.clock.start()
         self.addCleanup(self.clock.stop)

@@ -10,8 +10,12 @@ from .rent_collection import monthly_rent_rows
 from .services import generate_rent_charges_until, record_payment, settle_charges
 
 
+from .test_support import configure_test_account
+
+
 class MonthlyRentCollectionTests(TestCase):
     def setUp(self):
+        configure_test_account(self)
         clock = patch("django.utils.timezone.localdate", return_value=date(2026, 10, 1))
         clock.start()
         self.addCleanup(clock.stop)

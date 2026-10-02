@@ -17,8 +17,12 @@ from .services import renew_tenancy
 from .spreadsheet_import import import_template, TemplateImportError
 
 
+from .test_support import configure_test_account
+
+
 class YueshanRuleTests(TestCase):
     def setUp(self):
+        configure_test_account(self)
         self.room = Room.objects.create(number="A01", listing_price=3500)
         self.other = Room.objects.create(number="A101", status="self_use")
         self.person = Person.objects.create(name="示例主租客", id_number="110101199001010011")

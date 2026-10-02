@@ -11,8 +11,12 @@ from .models import ApartmentSettings, Charge, Person, Room, Tenancy
 from .services import generate_due_charges, generate_heating_charges_until, generate_rent_charges_until, renew_tenancy
 
 
+from .test_support import configure_test_account
+
+
 class ImportInitializationTests(TestCase):
     def setUp(self):
+        configure_test_account(self)
         self.room = Room.objects.create(number="A02", listing_price=3500)
         self.person = Person.objects.create(name="张凯", id_number=None)
         self.tenancy = Tenancy.objects.create(

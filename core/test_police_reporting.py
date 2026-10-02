@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from django.apps import apps
 from django.core.management import call_command
-from django.test import Client, TestCase
+from django.test import TestCase
 from django.urls import reverse
 from openpyxl import load_workbook
 
@@ -14,10 +14,12 @@ from .models import Charge, Payment, Person, PoliceReportExport, Room, Stay, Ten
 from .services import checkout_tenancy, renew_tenancy, set_planned_checkout
 from .spreadsheet_import import clear_business_data
 from .views import police_fingerprint
+from .test_support import authenticated_client, configure_test_account
 
 
 class PoliceReportingTests(TestCase):
     def setUp(self):
+        configure_test_account(self)
         self.clock = patch("django.utils.timezone.localdate", return_value=date(2026, 10, 2))
         self.clock.start()
         self.addCleanup(self.clock.stop)
@@ -76,7 +78,7 @@ class PoliceReportingTests(TestCase):
         report = PoliceReportExport.objects.get()
         self.assertRedirects(response, reverse("police_report_detail", args=[report.pk]) + "?download=1")
         self.assertEqual(report.rows[0]["values"][6], text)
-        downloaded = Client().get(reverse("police_report_download", args=[report.pk]))
+        downloaded = authenticated_client(self).get(reverse("police_report_download", args=[report.pk]))
         self.assertEqual(load_workbook(BytesIO(downloaded.content)).active["G3"].value, text)
         self.stay.refresh_from_db(); self.tenancy.refresh_from_db()
         self.assertEqual(self.stay.police_report_text_override, text)
@@ -101,10 +103,10 @@ class PoliceReportingTests(TestCase):
         self.assertFalse(self.stay.police_departure_required)
         self.assertIsNone(self.stay.police_departure_reported_at)
         self.assertEqual(police_report_rows(), [])
-        preview = Client().get(reverse("police_preview"))
+        preview = authenticated_client(self).get(reverse("police_preview"))
         self.assertEqual(preview.context["excluded_count"], 1)
         self.assertContains(preview, "已保存：不报备")
-        report, _ = self.generate(Client()); self.confirm(report)
+        report, _ = self.generate(authenticated_client(self)); self.confirm(report)
         self.stay.refresh_from_db()
         self.assertIsNone(self.stay.police_departure_reported_at)
         self.client.post(reverse("police_preview"), self.preview_payload({self.stay.pk: {"report_departure": "yes"}}))
@@ -236,7 +238,7 @@ class PoliceReportingTests(TestCase):
         self.generate()
         self.assertEqual(police_report_rows()[0]["text"], "退租")
         self.stay.refresh_from_db(); self.assertIsNone(self.stay.police_departure_reported_at)
-        self.confirm(report, Client())
+        self.confirm(report, authenticated_client(self))
         self.assertEqual(police_report_rows(), [])
         self.stay.refresh_from_db(); self.assertIsNotNone(self.stay.police_departure_reported_at)
         self.confirm(report)
@@ -334,7 +336,7 @@ class PoliceReportingTests(TestCase):
         self.depart(); report, first = self.generate()
         self.person.name = "已修改姓名"; self.person.save()
         self.confirm(report)
-        response = Client().get(reverse("police_report_download", args=[report.pk]))
+        response = authenticated_client(self).get(reverse("police_report_download", args=[report.pk]))
         original = list(load_workbook(BytesIO(first.content)).active.values)
         restored = list(load_workbook(BytesIO(response.content)).active.values)
         self.assertEqual(original, restored)

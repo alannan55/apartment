@@ -11,10 +11,12 @@ if (-not (Test-Path -LiteralPath $apartmentPython)) {
 }
 
 Write-Host '正在检查项目环境...'
-& $apartmentPython -c "import sys, django, openpyxl, PIL; print('Python:', sys.executable)"
+& $apartmentPython -c "import sys, django, openpyxl, PIL, whitenoise; print('Python:', sys.executable)"
 if ($LASTEXITCODE -ne 0) { throw '依赖不完整，请用项目 .venv 中的 Python 安装 requirements.txt。' }
 & $apartmentPython manage.py check
 if ($LASTEXITCODE -ne 0) { throw '项目检查未通过，请根据上方提示处理。' }
+& $apartmentPython manage.py check_runtime
+if ($LASTEXITCODE -ne 0) { throw '账号或运行环境未准备好，请根据上方提示处理。' }
 if ($DryRun) { return }
 
 Write-Host '正在更新数据结构...'

@@ -1,0 +1,17 @@
+.git
+.venv
+__pycache__
+**/__pycache__
+*.pyc
+*.sqlite3*
+*.xlsx
+*.xls
+*.csv
+*.log
+outputs
+media
+data
+staticfiles
+.env
+**/.env
+config/accounts.json

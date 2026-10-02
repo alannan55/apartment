@@ -11,6 +11,7 @@
 <body>
   <header class="topbar">
     <a class="brand" href="{% url 'dashboard' %}">悦山运营</a>
+    {% if request.user.is_authenticated %}
     <nav class="nav">
       <a href="{% url 'room_list' %}" {% if request.path == '/' or '/rooms/' in request.path %}aria-current="page"{% endif %}>房态</a>
       <a href="{% url 'bill_list' %}" {% if '/bills/' in request.path or '/payments/' in request.path or '/charges/' in request.path %}aria-current="page"{% endif %}>记账</a>
@@ -18,6 +19,11 @@
       <a href="{% url 'tenancy_list' %}" {% if '/tenancies/' in request.path %}aria-current="page"{% endif %}>合同</a>
       <a href="{% url 'more' %}" {% if request.path == '/more/' %}aria-current="page"{% endif %}>更多</a>
     </nav>
+    <div class="account-menu">
+      <span>{{ request.user.username }}</span>
+      <form method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="button ghost" type="submit">退出</button></form>
+    </div>
+    {% endif %}
   </header>
   <main class="page">
     {% if messages %}

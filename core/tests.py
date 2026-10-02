@@ -6,6 +6,7 @@ from unittest.mock import patch
 from django.db import OperationalError, connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
+from .test_support import configure_test_account
 
 from .exports import agent_room_status_image, import_template_workbook, police_report_workbook
 from .forms import PaymentForm, PersonCreateForm, SignContractForm
@@ -28,6 +29,7 @@ from .spreadsheet_import import import_template
 
 class BillingServiceTests(TestCase):
     def setUp(self):
+        configure_test_account(self)
         self.room = Room.objects.create(number="A01", listing_price=Decimal("3500.00"), orientation="南", floor=Room.Floor.SECOND)
         self.person_data = {
             "name": "张三",

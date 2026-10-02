@@ -11,10 +11,28 @@
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe manage.py account owner
 .\run_local.ps1
 ```
 
 电脑浏览器打开 `http://127.0.0.1:8000/`。手机和电脑在同一内网时，用电脑内网 IP 加端口访问。
+
+已有安装更新后也需先安装新增依赖，并用 `manage.py account owner` 创建首次登录账号。账号由 `config/accounts.json` 管理，密码交互输入，文件只保存哈希，不提供默认密码。登录后才可访问业务页面、修改接口、上传图片和导出报表；退出使用页面上的“退出”按钮。
+
+### R4S / iStoreOS 长期运行
+
+已提供 Linux ARM64 Docker 镜像、Gunicorn、中文字体、持久化 SQLite/上传目录，以及使用免费 DuckDNS + DNS 验证证书的 HTTPS 网关配置。详细步骤与账号管理见 [R4S 部署说明](deploy/r4s/README.md)。仓库不包含实际账号、证书或部署密钥，准备代码不等于已部署。
+
+日常账号管理：
+
+```powershell
+.\.venv\Scripts\python.exe manage.py account owner            # 创建 / 重设密码 / 重新启用
+.\.venv\Scripts\python.exe manage.py account owner --disable  # 禁用，已有会话下次请求失效
+.\.venv\Scripts\python.exe manage.py check_runtime            # 只读检查
+.\.venv\Scripts\python.exe manage.py backup_database           # 在线一致性数据库备份
+```
+
+新增普通账号使用相同命令替换用户名；所有普通账号目前拥有相同业务维护权限。可在账号文件中删除账号或设置 `is_active=false`，无需重启；修改密码会使旧会话失效。`--admin` 额外允许进入 Django 管理后台，R4S 公网网关默认不转发该后台。账号文件是唯一凭据来源，`createsuperuser` 和后台用户表不负责配置登录账号。
 
 ### 项目位于 WebDAV / RaiDrive 时
 
@@ -104,6 +122,6 @@ python manage.py clear_business_data --yes
 ## 首版边界
 
 - 当前使用 SQLite，适合本地电脑或家中内网服务器；数据库文件应放在本地磁盘。
-- 公网部署前应切换 PostgreSQL，并配置 HTTPS、强密码、备份和访问控制。
+- 少数管理人员、单实例、本地数据盘可继续使用 SQLite；频繁并发写入或多实例时再考虑 PostgreSQL。公网访问须配置 HTTPS、强密码、备份和访问控制。
 - 身份证、电话属于敏感信息，不建议在未加权限和 HTTPS 的情况下公网暴露。
 - OCR、身份证照片识别、合同照片识别后续可以作为“导入草稿”流程接入。

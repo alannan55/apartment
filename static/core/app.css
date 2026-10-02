@@ -941,3 +941,19 @@ button:disabled { opacity: .6; cursor: wait; }
 }
 
 .agent-room-features { margin: 0 0 10px; color: var(--muted); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+
+.account-menu { display: flex; align-items: center; gap: 10px; margin-left: auto; min-width: 0; }
+.account-menu span { overflow-wrap: anywhere; font-size: 13px; color: var(--muted); }
+.account-menu form { margin: 0; }
+.account-menu .button { white-space: nowrap; }
+.login-panel { width: min(420px, 100%); margin: 40px auto; padding: 28px; }
+.login-panel h1 { font-size: 24px; }
+.login-help { color: var(--muted); line-height: 1.7; }
+.login-panel .field { margin: 18px 0; }
+.login-panel .field input { width: 100%; min-width: 0; min-height: 46px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); font: inherit; font-size: 16px; }
+.login-panel .field input:focus { outline: 2px solid var(--primary); outline-offset: 1px; }
+.login-panel .button { width: 100%; margin-top: 8px; }
+@media (max-width: 640px) {
+  .topbar { flex-direction: row; align-items: center; gap: 12px; }
+  .login-panel { margin: 20px auto; padding: 22px; }
+}
