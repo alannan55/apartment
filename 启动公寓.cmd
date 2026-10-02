@@ -1,4 +1,6 @@
 @echo off
 cd /d "%~dp0"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0run_local.ps1"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0run_local.ps1" %*
+set "apartmentExitCode=%ERRORLEVEL%"
 pause
+exit /b %apartmentExitCode%

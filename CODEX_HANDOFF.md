@@ -1,5 +1,11 @@
 # 悦山公寓运营系统 Codex 交接
 
+## 2026-10-02 Windows conda 调试入口与两个业务账号
+
+- Windows 启动改用用户指定的 `utils` conda 环境；`run_local.ps1` 自动初始化并激活环境，无需 PowerShell profile，保持启动前检查和迁移。支持 `-DryRun`、`-Port`、`-BindAddress`、`-NoReload`，`启动公寓.cmd` 透传参数。入口显式启用 DEBUG 与 HTTP，R4S 仍使用独立 ARM64 Docker / Gunicorn / HTTPS 配置。
+- 已在本地 `config/accounts.json` 创建启用的普通业务账号 `18611133192`、`18518912031`，密码使用用户指定值且只保存哈希。文件继续被 Git 和 Docker 构建排除，部署时必须单独迁移到数据盘账号目录；步骤已补入 `deploy/r4s/README.md`。不要重设已有账号或自动赋予 Django 后台权限。
+- 已补齐 `utils` 的 WhiteNoise 依赖。验证：201 项测试通过；无 profile 启动器预检、真实 Windows HTTP 服务启动与两个账号登录、迁移一致性、Compose 配置和 diff 检查通过。启动验证使用临时数据库，正式业务数据库未修改。未连接或实际部署 R4S，ARM64 容器运行与公网 HTTPS 尚待部署验证。
+
 ## 2026-10-02 文件账号登录与 R4S 部署准备
 
 - 用户授权开始改代码，明确本次不实际部署。新增 `/login/`、POST 退出、全局业务/下载/上传文件登录保护和登录频率限制。所有普通账号拥有相同业务维护权限；没有自助注册或默认密码。

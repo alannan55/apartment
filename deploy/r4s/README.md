@@ -1,6 +1,6 @@
 # R4S / iStoreOS 部署说明
 
-适用于 4GB R4S、已挂载的 USB 硬盘和少数固定管理人员。代码已准备，以下命令用于之后正式部署，本次不自动执行。不要复制 Windows `.venv` 到 R4S。
+适用于 4GB R4S、已挂载的 USB 硬盘和少数固定管理人员。Windows 调试使用 `utils` conda 环境和项目根目录的 `启动公寓.cmd`；R4S 使用以下 ARM64 Docker 配置，不复制 Windows Python 环境。
 
 ## 结构与端口
 
@@ -78,7 +78,17 @@ R4S 加载两份 tar 后可跳过 `docker compose build`。构建不需要真实
 chown -R 10001:10001 "$apartment_storage/data"
 ```
 
-创建账号时临时将账号目录改为可写；普通服务运行时该目录仍只读。绑定整个目录，账号命令原子替换 JSON 后能立即被应用读取。
+本地已配置的 `18611133192`、`18518912031` 两个账号保存在项目 `config/accounts.json`（只有密码哈希）。该文件不在 Git 或 Docker 镜像内；部署时单独复制到 `$apartment_storage/config/accounts.json`，即可沿用相同账号和密码。不要覆盖 R4S 已有的账号文件；已有文件时用下述 `account` 命令逐个添加。首次复制后设置权限：
+
+```sh
+# 在 deploy/r4s 目录执行；先单独传入本地文件到 R4S 项目的 config/accounts.json。
+# 仅当目标账号文件尚不存在时复制。
+test ! -e "$apartment_storage/config/accounts.json" && cp ../../config/accounts.json "$apartment_storage/config/accounts.json"
+chown 10001:10001 "$apartment_storage/config/accounts.json"
+chmod 600 "$apartment_storage/config/accounts.json"
+```
+
+需要创建其他账号时临时将账号目录改为可写；普通服务运行时该目录仍只读。绑定整个目录，账号命令原子替换 JSON 后能立即被应用读取。已迁入账号文件时跳过 `account owner`，直接运行 `check_runtime`。
 
 ```sh
 docker compose run --rm --no-deps --volume "$apartment_storage/config:/config:rw" app python manage.py account owner
@@ -167,9 +177,9 @@ docker compose run --rm --no-deps app python manage.py backup_database
 ## 本地验证与范围
 
 ```powershell
-.\.venv\Scripts\python.exe manage.py check
-.\.venv\Scripts\python.exe manage.py test
-.\.venv\Scripts\python.exe manage.py makemigrations --check --dry-run
+conda run -n utils python manage.py check
+conda run -n utils python manage.py test
+conda run -n utils python manage.py makemigrations --check --dry-run
 docker compose --env-file deploy/r4s/.env.example -f deploy/r4s/compose.yaml config --quiet
 ```
 
