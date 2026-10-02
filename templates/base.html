@@ -6,17 +6,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}悦山公寓运营{% endblock %}</title>
   <link rel="stylesheet" href="{% static 'core/app.css' %}">
+  <script src="{% static 'core/app.js' %}" defer></script>
 </head>
 <body>
   <header class="topbar">
     <a class="brand" href="{% url 'dashboard' %}">悦山运营</a>
     <nav class="nav">
-      <a href="{% url 'dashboard' %}">首页</a>
-      <a href="{% url 'room_list' %}">房间</a>
-      <a href="{% url 'tenancy_list' %}">合同</a>
-      <a href="{% url 'bill_list' %}">账单</a>
-      <a href="{% url 'charge_list' %}">流水</a>
-      <a href="{% url 'person_list' %}">人员</a>
+      <a href="{% url 'room_list' %}" {% if request.path == '/' or '/rooms/' in request.path %}aria-current="page"{% endif %}>房态</a>
+      <a href="{% url 'bill_list' %}" {% if '/bills/' in request.path or '/payments/' in request.path or '/charges/' in request.path %}aria-current="page"{% endif %}>记账</a>
+      <a href="{% url 'person_list' %}" {% if '/people/' in request.path %}aria-current="page"{% endif %}>人员</a>
+      <a href="{% url 'tenancy_list' %}" {% if '/tenancies/' in request.path %}aria-current="page"{% endif %}>合同</a>
+      <a href="{% url 'more' %}" {% if request.path == '/more/' %}aria-current="page"{% endif %}>更多</a>
     </nav>
   </header>
   <main class="page">

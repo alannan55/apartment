@@ -1,0 +1,6 @@
+<label data-field="{{ field.name }}" class="field {% if field.field.widget.attrs.rows %}field-wide{% endif %}">
+  <span>{{ field.label }}</span>
+  {{ field }}
+  {% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}
+  {% if field.errors %}<small class="field-error">{{ field.errors|striptags }}</small>{% endif %}
+</label>

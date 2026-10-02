@@ -2,18 +2,17 @@
 {% block title %}流水 - 悦山公寓运营{% endblock %}
 {% block content %}
 <section class="page-head">
-  <div><h1>流水</h1></div>
+  <div><h1>收支记录</h1><p>实际收到或付出的钱，每笔流水只记录一次。</p></div>
   <div class="actions">
-    <a class="button" href="{% url 'payment_create' %}">记录收付款</a>
+    <a class="button primary" href="{% url 'payment_create' %}">收款</a><a class="button" href="{% url 'payment_create' %}?direction=pay">记支出</a>
     <a class="button" href="{% url 'charge_create' %}">新增账单</a>
   </div>
 </section>
-<nav class="tabs">
-  <a class="{% if status == 'all' or status == '' %}active{% endif %}" href="{% url 'charge_list' %}?status=all">全部</a>
-  <a class="{% if status == 'open' %}active{% endif %}" href="{% url 'charge_list' %}?status=open">待处理</a>
-  <a class="{% if status == 'paid' %}active{% endif %}" href="{% url 'charge_list' %}?status=paid">已结清</a>
-  <a class="{% if status == 'payments' %}active{% endif %}" href="{% url 'charge_list' %}?status=payments">收付款</a>
-</nav>
+{% include "core/partials/account_nav.html" with accounting_tab="payments" %}
+<form class="list-filter" method="get"><input type="search" class="input" name="q" value="{{ q }}" placeholder="搜索房号、姓名、备注" aria-label="搜索收支"><input type="month" class="input" name="month" value="{{ month }}" aria-label="收支月份"><input type="hidden" name="status" value="{{ status }}"><button class="button" type="submit">查找</button><a href="{% url 'charge_list' %}">重置</a></form>
+<div class="balance-note">当前范围：实收 ¥{{ income_total }} · 实付 ¥{{ expense_total }}</div>
+<details class="advanced-options"><summary>查看账单与流水对照</summary><a href="?status=all">全部账务</a> · <a href="?status=open">未结账单</a> · <a href="?status=paid">已结账单</a> · <a href="?status=payments">仅实际收支</a></details>
+
 <section class="panel">
   {% include "core/partials/ledger_table.html" with ledger_rows=ledger_rows %}
 </section>

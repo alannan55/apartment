@@ -3,29 +3,26 @@
 {% block content %}
 <section class="page-head bill-page-head">
   <div>
-    <h1>账单</h1>
+    <h1>记账</h1>
     <p>
       {% if direction == "income" %}
-        房租与取暖费按房间、月份合并展示，收款后自动进入流水。
+        全部待收按房间、月份展示，包含押金和临时费用。
       {% else %}
-        只展示中介佣金、押金退款和产权方房租，付款后自动进入流水。
+        全部待付集中处理，也可筛选中介佣金、押金退款和产权方房租。
       {% endif %}
     </p>
   </div>
   <div class="actions">
-    <a class="button" href="{% url 'property_rent_rule_list' %}">产权方房租配置</a>
-    <a class="button" href="{% url 'charge_create' %}">新增账单</a>
+    <a class="button primary" href="{% url 'monthly_rent_collection' %}{% if scope == 'month' %}?month={{ month_value }}{% endif %}">按月收租</a>
+    <a class="button primary" href="{% url 'payment_create' %}">收款</a>
+    <a class="button" href="{% url 'deposit_collection' %}">批量登记押金</a>
+    <a class="button" href="{% url 'payment_create' %}?direction=pay">记支出</a>
+    <a class="button" href="{% url 'charge_create' %}?direction=income">增加待收</a>
+    <a class="button" href="{% url 'charge_create' %}?direction=expense">增加待付</a>
   </div>
 </section>
 
-<nav class="bill-module-tabs" aria-label="账单方向">
-  <a class="{% if direction == 'income' %}active{% endif %}" href="{% url 'bill_list' %}?direction=income&scope={{ scope }}&status={{ status }}&month={{ month_value }}">
-    待收账单
-  </a>
-  <a class="{% if direction == 'expense' %}active{% endif %}" href="{% url 'bill_list' %}?direction=expense&scope={{ scope }}&status={{ status }}&month={{ month_value }}">
-    待付账单
-  </a>
-</nav>
+{% include "core/partials/account_nav.html" with accounting_tab=direction %}
 
 <section class="bill-summary-band">
   <div class="bill-summary-item">
@@ -46,37 +43,26 @@
   </div>
 </section>
 
-<section class="bill-toolbar">
-  <div class="bill-scope-tabs">
-    <a class="{% if scope == 'month' %}active{% endif %}" href="{% url 'bill_list' %}?direction={{ direction }}&scope=month&status={{ status }}&month={{ month_value }}">月度账单</a>
-    <a class="{% if scope == 'all' %}active{% endif %}" href="{% url 'bill_list' %}?direction={{ direction }}&scope=all&status={{ status }}&month={{ month_value }}">全部账单</a>
-  </div>
+<form method="get" class="list-filter bill-filters">
+  <input type="hidden" name="direction" value="{{ direction }}"><input type="hidden" name="room" value="{{ room_filter }}">
+  <input class="input" type="search" name="q" value="{{ q }}" placeholder="搜索房号、姓名、费用" aria-label="搜索账单">
+  <select class="input" name="timing" aria-label="到期范围"><option value="all">全部日期</option><option value="overdue" {% if timing == 'overdue' %}selected{% endif %}>已逾期</option><option value="due" {% if timing == 'due' %}selected{% endif %}>到期未结</option><option value="future" {% if timing == 'future' %}selected{% endif %}>未来应收付</option></select>
 
-  <form method="get" class="bill-filter-form">
-    <input type="hidden" name="direction" value="{{ direction }}">
-    <input type="hidden" name="scope" value="{{ scope }}">
-    <label class="compact-field">
-      <span>月份</span>
-      <input class="input" type="month" name="month" value="{{ month_value }}" {% if scope == "all" %}disabled{% endif %}>
-    </label>
-    <label class="compact-field">
-      <span>状态</span>
-      <select class="input" name="status">
-        <option value="all" {% if status == "all" %}selected{% endif %}>全部</option>
-        <option value="open" {% if status == "open" %}selected{% endif %}>待处理</option>
-        <option value="paid" {% if status == "paid" %}selected{% endif %}>已结清</option>
-      </select>
-    </label>
-    <button class="button primary" type="submit">筛选</button>
-  </form>
-</section>
+  <select class="input" name="status" aria-label="结清状态"><option value="all">全部状态</option><option value="open" {% if status == 'open' %}selected{% endif %}>未结清</option><option value="paid" {% if status == 'paid' %}selected{% endif %}>已结清</option></select>
+  <details class="advanced-filter" {% if scope == 'month' or category != 'all' %}open{% endif %}><summary>更多筛选</summary><div>
+  <select class="input" name="category" aria-label="费用范围"><option value="all">全部费用</option>{% if direction == 'income' %}<option value="regular" {% if category == 'regular' %}selected{% endif %}>房租与取暖</option><option value="deposit" {% if category == 'deposit' %}selected{% endif %}>押金</option>{% else %}<option value="fixed" {% if category == 'fixed' %}selected{% endif %}>固定待付</option>{% endif %}</select>
+  <input type="hidden" name="scope" value="{{ scope }}">
+  <label>指定月份（留空看全部）<input class="input" type="month" name="month" value="{% if scope == 'month' %}{{ month_value }}{% endif %}" aria-label="账单月份"></label>
+  </div></details>
+  <button class="button" type="submit">筛选</button><a href="{% url 'bill_list' %}?direction={{ direction }}">重置</a>
+</form>
 
 {% if direction == "income" %}
-  <form id="bill-bulk-form" method="post" action="{% url 'bill_bulk_settle' %}" class="bill-bulk-bar">
+  <details class="advanced-options"><summary>批量收款</summary><form data-confirm="确认所选账单款项均已实际收到？将逐户记录收款。" id="bill-bulk-form" method="post" action="{% url 'bill_bulk_settle' %}" class="bill-bulk-bar">
     {% csrf_token %}
     <span>勾选多户账单后，可分别生成流水并一次性全额结清。</span>
     <button class="button primary" type="submit">批量全额收款</button>
-  </form>
+  </form></details>
 {% endif %}
 
 <section class="bill-list" aria-label="{% if direction == 'income' %}待收账单{% else %}待付账单{% endif %}">
@@ -106,7 +92,7 @@
         {% endif %}
         <span>{% if row.person %}{{ row.person.name }}{% else %}无关联人员{% endif %}</span>
         {% if direction == "income" %}
-          <small>累计欠款 ¥{{ row.cumulative_due }}</small>
+          <small>到期未收 ¥{{ row.cumulative_due }}</small>
         {% elif row.due_date %}
           <small>应付日期 {{ row.due_date|date:"Y-m-d" }}</small>
         {% endif %}
@@ -116,20 +102,20 @@
         {% if direction == "income" %}
           {% for component in row.components %}
             <div class="bill-component">
-              <strong>{{ component.label }}</strong>
+              <strong>{{ component.label }}</strong><a class="edit-charge" href="{% url 'charge_edit' component.id %}">调整</a>
               <span>
                 {% if component.period_start %}
                   {{ component.period_start|date:"m-d" }} 至 {{ component.period_end|date:"m-d" }}
                 {% endif %}
               </span>
-              <span>应收 ¥{{ component.amount }}</span>
+              <span>应收 ¥{{ component.amount }} · {{ component.due_date|date:"m-d" }} 到期</span>
               <span>已收 ¥{{ component.paid_amount }}</span>
               {% if component.balance > 0 %}<b>未结 ¥{{ component.balance }}</b>{% endif %}
             </div>
           {% endfor %}
         {% else %}
           <div class="bill-component">
-            <strong>{{ row.category_label }}</strong>
+            <strong>{{ row.category_label }}</strong><a href="{% url 'charge_edit' row.charge_ids.0 %}">调整</a>
             <span>{{ row.description }}</span>
             <span>应付 ¥{{ row.amount }}</span>
             <span>已付 ¥{{ row.paid_amount }}</span>
@@ -146,7 +132,7 @@
 
       <div class="bill-row-actions">
         {% if row.balance > 0 %}
-          <form method="post" action="{% url 'bill_settle' %}" class="bill-full-form">
+          <form method="post" action="{% url 'bill_settle' %}" class="bill-full-form" data-confirm="确认已实际{% if direction == 'income' %}收到{% else %}支付{% endif %} ¥{{ row.balance }}？">
             {% csrf_token %}
             {% for charge_id in row.charge_ids %}<input type="hidden" name="charge_ids" value="{{ charge_id }}">{% endfor %}
             <button class="button primary" type="submit">{% if direction == "income" %}全额收{% else %}全额付{% endif %}</button>
@@ -163,7 +149,7 @@
         {% if row.latest_payment %}
           <div class="bill-correction-actions">
             <a href="{% url 'bill_payment_edit' row.latest_payment.id %}">修改最近一笔</a>
-            <form method="post" action="{% url 'payment_delete' row.latest_payment.id %}" class="inline-form">
+            <form method="post" action="{% url 'payment_delete' row.latest_payment.id %}" class="inline-form" data-confirm="确认撤销这笔收付款？对应账单将恢复未结金额。">
               {% csrf_token %}
               <button class="link-button danger" type="submit">撤销最近一笔</button>
             </form>

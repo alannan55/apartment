@@ -4,7 +4,7 @@
 <section class="page-head">
   <div>
     <h1>{{ person.name }}</h1>
-    <p class="mono">{{ person.id_number }}</p>
+    <p class="mono">{{ person.id_number|default:"身份证待补" }}</p>
   </div>
   <div class="actions">
     <a class="button primary" href="{% url 'person_stay_create' person.id %}">添加入住</a>
@@ -20,7 +20,7 @@
       <dt>联系人</dt><dd>{{ person.emergency_name|default:"-" }}</dd>
       <dt>联系电话</dt><dd>{{ person.emergency_phone|default:"-" }}</dd>
       <dt>联系地址</dt><dd>{{ person.emergency_address|default:"-" }}</dd>
-      <dt>备注</dt><dd>{{ person.notes|default:"-" }}</dd>
+      <dt>备注</dt><dd>{{ person.display_notes|default:"-"|linebreaksbr }}</dd>
     </dl>
   </div>
   <div class="panel">
@@ -36,7 +36,7 @@
             <tr>
               <td><a href="{% url 'room_detail' stay.room.id %}">{{ stay.room.number }}</a></td>
               <td>{{ stay.get_stay_type_display }}</td>
-              <td>{{ stay.start_date|date:"Y-m-d" }}{% if stay.end_date %} 至 {{ stay.end_date|date:"Y-m-d" }}{% endif %}</td>
+              <td>{% if stay.start_date %}{{ stay.start_date|date:"Y-m-d" }}{% else %}日期未提供{% endif %}{% if stay.end_date %} {% if stay.is_active %}预计至{% else %}至{% endif %} {{ stay.end_date|date:"Y-m-d" }}{% endif %}</td>
               <td>{% if stay.is_active %}当前在住{% else %}已结束{% endif %}</td>
               <td class="row-actions">
                 <a href="{% url 'person_stay_edit' person.id stay.id %}">修改</a>

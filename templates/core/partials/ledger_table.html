@@ -36,17 +36,17 @@
           <td>¥{{ row.amount }}</td>
           <td>¥{{ row.balance }}</td>
           <td>{{ row.status }}</td>
-          <td>{{ row.description }}</td>
+          <td>{{ row.description }}{% if row.kind == 'payment' and row.obj.allocations.all %}<details><summary>查看抵扣明细</summary>{% for allocation in row.obj.allocations.all %}<p>{{ allocation.charge.description }}：¥{{ allocation.amount }}</p>{% endfor %}</details>{% endif %}</td>
           <td class="row-actions">
             {% if row.kind == "payment" %}
               <a href="{% url 'payment_edit' row.obj.id %}">修改</a>
-              <form method="post" action="{% url 'payment_delete' row.obj.id %}" class="inline-form">
+              <form method="post" action="{% url 'payment_delete' row.obj.id %}" class="inline-form" data-confirm="确认删除这条记录？删除收付款会恢复对应账单的未结金额。">
                 {% csrf_token %}
                 <button class="link-button" type="submit">删除</button>
               </form>
             {% else %}
               <a href="{% url 'charge_edit' row.obj.id %}">修改</a>
-              <form method="post" action="{% url 'charge_delete' row.obj.id %}" class="inline-form">
+              <form method="post" action="{% url 'charge_delete' row.obj.id %}" class="inline-form" data-confirm="确认删除这条记录？删除收付款会恢复对应账单的未结金额。">
                 {% csrf_token %}
                 <button class="link-button" type="submit">删除</button>
               </form>

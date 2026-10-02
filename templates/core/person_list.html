@@ -2,12 +2,20 @@
 {% block title %}人员 - 悦山公寓运营{% endblock %}
 {% block content %}
 <section class="page-head">
-  <div><h1>人员</h1></div>
+  <div><h1>入住人员 <small>{{ person_count }}人</small></h1><p>默认查看当前在住人员，离开后仍保留历史档案。</p></div>
   <div class="actions">
-    <a class="button primary" href="{% url 'person_create' %}">新增人员</a>
-    <a class="button" href="{% url 'export_police' %}">导出警务报备</a>
+    <a class="button primary" href="{% url 'person_create' %}{% if room_filter %}?room={{ room_filter }}{% endif %}">新增人员</a>
+    <a class="button" href="{% url 'visitor_stay_create' %}">登记探望/暂住</a>
+    <a class="button" href="{% url 'police_preview' %}">预览并下载报备</a>
   </div>
 </section>
+<div class="notice-strip">{% if report_changed %}人员信息自上次导出后有更新，建议重新导出报备。{% else %}人员信息与上次导出一致。{% endif %}{% if last_export %} 上次导出：{{ last_export }}。{% endif %}<small>按当前浏览器记录导出时间；下载不代表已发送。</small></div>
+<form method="get" class="list-filter">
+  <input class="input" type="search" name="q" value="{{ q }}" placeholder="房号 / 姓名 / 电话 / 身份证" aria-label="搜索人员">
+  <select class="input" name="scope" aria-label="人员范围"><option value="active" {% if scope == 'active' %}selected{% endif %}>当前在住</option><option value="history" {% if scope == 'history' %}selected{% endif %}>历史人员</option><option value="all" {% if scope == 'all' %}selected{% endif %}>全部人员</option></select>
+  <select class="input" name="room" aria-label="筛选房间"><option value="">全部房间</option>{% for room in rooms %}<option value="{{ room.id }}" {% if room_filter == room.id|stringformat:'s' %}selected{% endif %}>{{ room.number }}</option>{% endfor %}</select>
+  <button class="button" type="submit">查找</button><a href="{% url 'person_list' %}">重置</a>
+</form>
 <section class="panel">
   <div class="table-wrap">
     <table>
@@ -17,19 +25,17 @@
           {% with person=row.person %}
           <tr>
             <td>{{ row.rooms|default:"-" }}</td>
-            <td>{{ row.types|default:"-" }}</td>
+            <td>{{ row.types|default:"历史人员" }}{% if row.visitor_due %}<span class="date-alert"> · 暂住到期，请确认是否离开</span>{% endif %}</td>
             <td><a href="{% url 'person_detail' person.id %}"><strong>{{ person.name }}</strong></a></td>
-            <td class="mono">{{ person.id_number }}</td>
-            <td>{{ person.phone }}</td>
+            <td class="mono"><details><summary>查看证件</summary>{{ person.id_number|default:"身份证待补" }}</details></td>
+            <td><a href="tel:{{ person.phone }}">{{ person.phone }}</a></td>
             <td>{{ person.emergency_name }}</td>
             <td>{{ person.emergency_phone }}</td>
             <td class="row-actions">
               <a href="{% url 'person_detail' person.id %}">查看</a>
               <a href="{% url 'person_edit' person.id %}">修改</a>
-              <form method="post" action="{% url 'person_delete' person.id %}" class="inline-form">
-                {% csrf_token %}
-                <button class="link-button" type="submit">删除</button>
-              </form>
+              {% for stay in row.stays %}<form method="post" action="{% url 'person_stay_remove' person.id stay.id %}" class="inline-form" data-confirm="确认 {{ person.name }} 已离开 {{ stay.room.number }}？历史档案会保留。"><input type="hidden" name="next" value="{{ request.get_full_path }}">{% csrf_token %}<button class="link-button" type="submit">登记离开{% if row.stays|length > 1 %} {{ stay.room.number }}{% endif %}</button></form>{% empty %}<a href="{% url 'person_create' %}?person={{ person.id }}">再次入住</a>{% endfor %}
+
             </td>
           </tr>
           {% endwith %}

@@ -9,12 +9,13 @@
 </section>
 
 <form method="post" class="form-panel contract-form">
-  {% csrf_token %}
+  {% csrf_token %}<input type="hidden" name="next" value="{{ return_url }}">
   {% for hidden in form.hidden_fields %}{{ hidden }}{% endfor %}
   {% if form.non_field_errors %}
     <div class="form-errors contract-form-errors">{{ form.non_field_errors }}</div>
   {% endif %}
 
+  <div class="person-search" data-person-search><label class="field"><span>老租客再次入住，可搜索复用资料</span><input type="search" class="input" placeholder="姓名、电话或身份证" autocomplete="off"></label><div class="search-results" aria-live="polite"></div></div>
   <section class="contract-section">
     <div class="contract-section-title">
       <h2>房间</h2>
@@ -166,8 +167,16 @@
     </div>
   </section>
 
+  <details class="roommates-section" {% if roommates.total_error_count %}open{% endif %}><summary>同时登记同住人员（可选）</summary><section class="contract-section"><div class="contract-section-title"><h2>同住人员</h2><p>每人一份资料，与主租客一起登记入住。</p></div><div>
+    {{ roommates.management_form }}{{ roommates.non_form_errors }}
+    <div id="roommate-forms">{% for roommate in roommates %}<div class="roommate-form contract-fields contract-fields-two">{% for field in roommate %}<label class="field"><span>{{ field.label }}</span>{{ field }}{{ field.errors }}</label>{% endfor %}<button class="button" type="button" data-use-primary-contact>以主租客为紧急联系人</button></div>{% endfor %}</div>
+    <template id="roommate-template"><div class="roommate-form contract-fields contract-fields-two">{% for field in roommates.empty_form %}<label class="field"><span>{{ field.label }}</span>{{ field }}</label>{% endfor %}<button class="button" type="button" data-use-primary-contact>以主租客为紧急联系人</button></div></template>
+    <button class="button" type="button" id="add-roommate">再添加一位同住人</button>
+  </div></section></details>
+  <section class="contract-section"><div class="contract-section-title"><h2>本次收款</h2><p>只填写实际收到的钱，未收款留空。</p></div><div class="contract-fields"><label class="field"><span>{{ form.received_amount.label }}</span>{{ form.received_amount }}{{ form.received_amount.errors }}</label></div></section>
+  <aside class="calculation-preview" data-contract-preview aria-live="polite">填写租期和月租后展示首期费用参考。</aside>
   <div class="form-actions contract-form-actions">
-    <a class="button ghost" href="{% if contract_room %}{% url 'room_detail' contract_room.id %}{% else %}{% url 'room_list' %}{% endif %}">取消</a>
+    <a class="button ghost" href="{{ return_url }}">取消</a>
     <button class="button primary" type="submit">{{ submit_label }}</button>
   </div>
 </form>

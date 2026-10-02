@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}按月收租 - 悦山公寓运营{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div><h1>按月收租</h1><p>像表格一样勾选已交租的房间，一次记好当月房租。</p></div>
+  <div class="actions"><a class="button" href="{% url 'payment_create' %}">单独收款</a><a class="button" href="{% url 'deposit_collection' %}">批量登记押金</a><a class="button" href="{% url 'bill_list' %}">全部账单</a></div>
+</section>
+
+<form method="get" class="panel rent-month-filter">
+  <div class="list-filter">
+    <label class="compact-field">房租月份<input class="input" type="month" name="month" value="{{ month_value }}" required></label>
+    <button class="button" type="submit">查看月份</button>
+  </div>
+  <label class="field" for="rent-room-numbers">已交租房号</label>
+  <div class="rent-paste">
+    <textarea class="input" id="rent-room-numbers" name="room_numbers" rows="2" placeholder="例如 A04,A05,A08；逗号、空格或换行均可">{{ room_numbers }}</textarea>
+    <button class="button" type="submit">按房号勾选</button>
+  </div>
+  <small>粘贴房号后带入勾选，核对下面的金额，再确认记账。也可以直接勾选。</small>
+</form>
+
+<section class="bill-summary-band" aria-label="当月收租概况">
+  <div class="bill-summary-item"><span>已交齐</span><strong>{{ paid_count }} 户</strong></div>
+  <div class="bill-summary-item bill-summary-alert"><span>未交齐 / 待登记</span><strong>{{ open_count }} 户</strong></div>
+  <div class="bill-summary-item"><span>已登记实收</span><strong>¥{{ total_paid }}</strong></div>
+  <div class="bill-summary-item bill-summary-alert"><span>尚待收取或登记</span><strong>¥{{ total_balance }}</strong></div>
+</section>
+
+<form id="monthly-rent-form" method="post" data-monthly-rent data-confirm="确认所选房间的房租已实际收到？">
+  {% csrf_token %}<input type="hidden" name="month" value="{{ month_value }}">
+  {% if form.errors %}<div class="message error" role="alert">{{ form.non_field_errors }}{% for field in form %}{% if field.errors %}<p>{{ field.label }}：{{ field.errors|striptags }}</p>{% endif %}{% endfor %}</div>{% endif %}
+  <div class="rent-collection-bar">
+    <label class="compact-field">{{ form.date.label }}{{ form.date }}</label>
+    <div class="rent-selection-actions"><button class="button" type="button" data-rent-select="all">全选未交齐</button><button class="button" type="button" data-rent-select="none">取消选择</button></div>
+    <strong class="rent-selection-summary" data-rent-selection-summary aria-live="polite">勾选房间后确认收租</strong>
+    <button class="button primary" type="submit" name="action" value="bulk" data-rent-bulk>确认所选已交齐</button>
+  </div>
+  <p class="rent-help">未收金额用红色显示，已交齐用黑色显示。部分付款填“本次实收”单独保存；批量操作只登记尚欠的房租。记账日期可改为实际收款日。</p>
+  <div class="panel table-wrap rent-table-wrap">
+    <table class="rent-table">
+      <thead><tr><th>选择</th><th>房间 / 租客</th><th>本期房租</th><th>已收</th><th>未收</th><th>收租状态</th><th>单笔 / 部分收款</th></tr></thead>
+      <tbody>
+        {% for row in rent_rows %}
+        <tr class="rent-row rent-row-{{ row.status }}" data-rent-row data-room="{{ row.room.number }}" data-balance="{{ row.balance }}">
+          <td><label class="rent-select"><input type="checkbox" name="rows" value="{{ row.key }}" {% if row.selected %}checked{% endif %} {% if row.balance <= 0 %}disabled{% endif %} aria-label="选择 {{ row.room.number }}"><span>{{ row.room.number }}</span></label></td>
+          <td><a class="rent-room-number" href="{% url 'room_detail' row.room.id %}">{{ row.room.number }}</a><small>{{ row.person.name|default:'未关联租客' }}</small></td>
+          <td>{% if row.draft %}<label class="rent-draft-amount"><span class="sr-only">{{ row.amount_field.label }}</span>{{ row.amount_field }}</label>{% else %}<strong>¥{{ row.amount }}</strong>{% endif %}{% for period in row.periods %}{% if period.period_start %}<small>{{ period.period_start|date:'m-d' }} 至 {{ period.period_end|date:'m-d' }}</small>{% endif %}{% endfor %}</td>
+          <td class="rent-paid-amount">¥{{ row.paid }}</td>
+          <td class="rent-outstanding"><strong data-rent-balance>¥{{ row.balance }}</strong></td>
+          <td><span class="rent-state">{% if row.status == 'paid' %}已交齐{% elif row.status == 'partial' %}部分已收{% elif row.draft %}待登记{% else %}未收{% endif %}</span>{% if row.draft %}<small>应收可修改，保存时建账</small>{% endif %}{% if row.prepaid > 0 %}<small>已有预收 ¥{{ row.prepaid }}，保存时先抵扣</small>{% endif %}</td>
+          <td>{% if row.balance > 0 %}<div class="rent-single"><label><span class="sr-only">{{ row.room.number }} 本次实收</span><input class="input" type="number" name="partial_{{ row.key }}" min="0.01" step="0.01" value="{{ row.partial_amount }}" placeholder="本次实收" aria-label="{{ row.room.number }} 本次实收"></label><button class="button" type="submit" name="single_row" value="{{ row.key }}">记录收款</button></div><small>留空按全额收齐登记</small>{% else %}<a href="{% url 'bill_list' %}?room={{ row.room.id }}&month={{ month_value }}">查看 / 撤销记录</a>{% endif %}</td>
+        </tr>
+        {% empty %}<tr><td colspan="7" class="empty">这个月份没有可登记的房租。</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="rent-help">“待登记”的应收金额按现有合同计费规则预填，请核对。保存时先抵扣已记录的预收款，再登记房租余款；押金可用“批量登记押金”，取暖费等请在单独收款或全部账单中处理。</p>
+</form>
+{% endblock %}

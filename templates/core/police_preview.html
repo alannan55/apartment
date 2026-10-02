@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}报备预览 - 悦山公寓运营{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div><h1>报备预览 <small>{{ report_count }}人次</small></h1><p>在住 {{ current_count }} 人，待报备退租 {{ departure_count }} 人次，另有 {{ excluded_count }} 人次退租已选择不报备。包括全部暂住人员。</p></div>
+  <div class="actions"><button class="button" type="submit" form="police-edit" name="action" value="save">保存调整</button><button class="button primary" type="submit" form="police-edit" name="action" value="generate">保存并生成报备表</button><a class="button" href="{% url 'dashboard' %}">返回首页</a><a class="button" href="{% url 'person_list' %}">返回人员</a></div>
+</section>
+<div class="notice-strip">合同约定租期不足6个日历月时，常住租客的报备期间自动改为从合同开始日起1年，实际合同和收租日期不变。预计离开不会自动算作退租。下载后仍保留待报备退租人员，发送给警察后请确认本次报备已发送。</div>
+<p>可直接修改最终报备内容，留空并保存恢复自动生成。手动内容优先于自动期间，不修改实际合同和账务；姓名、身份证、电话等信息可点“修改人员资料”。退租选择“不报备”后不会进入新表，可随时改回；此选择不代表已发送。点击“保存调整”或“保存并生成报备表”后生效。</p>
+{% if not can_export %}<div class="form-errors">请修正下方提示后保存，再生成报备表。</div>{% endif %}
+<form id="police-edit" method="post">
+{% csrf_token %}{{ formset.management_form }}{{ formset.non_form_errors }}
+<section class="panel"><div class="table-wrap"><table>
+  <thead><tr><th>房间</th><th>姓名</th><th>类型</th><th>报备内容</th><th>是否报备</th><th>操作</th></tr></thead>
+  <tbody>{% for row in report_rows %}<tr>
+    <td>{{ row.stay.room.number }}</td><td>{{ row.stay.person.name }}</td><td>{% if row.departed %}{% if row.included %}<strong class="date-alert">退租待报备</strong>{% else %}退租不报备{% endif %}{% else %}{{ row.stay.get_stay_type_display }}{% endif %}</td>
+    <td>{{ row.form.stay_id }}{{ row.form.departure_token }}<label class="sr-only" for="{{ row.form.text.id_for_label }}">{{ row.stay.room.number }} {{ row.stay.person.name }} 报备内容</label>{{ row.form.text }}{{ row.form.text.errors }}{% for error in row.errors %}<p class="field-error">{{ error }}</p>{% endfor %}</td>
+    <td>{% if row.departed %}<label class="sr-only" for="{{ row.form.report_departure.id_for_label }}">{{ row.stay.person.name }} 退租是否报备</label>{{ row.form.report_departure }}{{ row.form.report_departure.errors }}{% if not row.included %}<small>已保存：不报备</small>{% endif %}{% else %}在住报备<input type="hidden" name="{{ row.form.report_departure.html_name }}" value="yes">{% endif %}</td>
+    <td><a href="{% url 'person_edit' row.stay.person_id %}?next={{ request.path|urlencode }}">修改人员资料</a><br><a href="{% url 'person_stay_edit' row.stay.person_id row.stay.id %}?next={{ request.path|urlencode }}">修改入住</a></td>
+  </tr>{% empty %}<tr><td colspan="6" class="empty">暂无在住或待处理退租人员</td></tr>{% endfor %}</tbody>
+</table></div></section>
+<div class="actions"><button class="button" type="submit" name="action" value="save">保存调整</button><button class="button primary" type="submit" name="action" value="generate">保存并生成报备表</button></div>
+</form>
+{% if recent_reports %}<section class="panel"><h2>最近生成的报备表</h2><p>每次生成保留当时的人员内容，可重新下载并确认发送。</p><div class="table-wrap"><table>
+  <thead><tr><th>生成时间</th><th>人数</th><th>退租</th><th>发送状态</th><th>操作</th></tr></thead>
+  <tbody>{% for report in recent_reports %}<tr><td>{{ report.created_at|date:"Y-m-d H:i" }}</td><td>{{ report.rows|length }}人次</td><td>{{ report.departure_count }}人次</td><td>{% if report.sent_at %}已确认发送 {{ report.sent_at|date:"Y-m-d H:i" }}{% else %}待确认发送{% endif %}</td><td><a href="{% url 'police_report_detail' report.pk %}">查看 / 下载 / 确认发送</a></td></tr>{% endfor %}</tbody>
+</table></div></section>{% endif %}
+{% endblock %}

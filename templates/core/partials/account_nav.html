@@ -1,0 +1,5 @@
+<nav class="bill-module-tabs" aria-label="记账">
+  <a class="{% if accounting_tab == 'income' %}active{% endif %}" href="{% url 'bill_list' %}?direction=income">待收</a>
+  <a class="{% if accounting_tab == 'expense' %}active{% endif %}" href="{% url 'bill_list' %}?direction=expense">待付</a>
+  <a class="{% if accounting_tab == 'payments' %}active{% endif %}" href="{% url 'charge_list' %}">收支记录</a>
+</nav>

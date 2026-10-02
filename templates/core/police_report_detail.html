@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}本次报备 - 悦山公寓运营{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div><h1>本次报备 <small>{{ report.rows|length }}人次</small></h1><p>{{ report.created_at|date:"Y-m-d H:i" }} 生成，包含退租 {{ report.departure_count }} 人次。</p></div>
+  <div class="actions"><a id="report-download" class="button primary" href="{% url 'police_report_download' report.pk %}">下载本次报备表</a><a class="button" href="{% url 'police_preview' %}">返回最新报备预览</a></div>
+</section>
+<div class="notice-strip">此表保存了生成时的人员内容，重新下载内容一致。{% if report.sent_at %}已确认于 {{ report.sent_at|date:"Y-m-d H:i" }} 发送。{% else %}下载不代表已发送；发送给警察后请点击下方确认。确认后，本表中的退租人员下次不再重复报备。{% endif %}</div>
+<section class="panel"><div class="table-wrap"><table>
+  <thead><tr><th>姓名</th><th>身份证</th><th>房间号</th><th>电话</th><th>紧急联系人</th><th>紧急联系人电话</th><th>合同时间</th></tr></thead>
+  <tbody>{% for row in report.rows %}<tr>{% for value in row.values %}<td{% if forloop.last and row.departure_token %} class="date-alert"{% endif %}>{{ value|default_if_none:"" }}</td>{% endfor %}</tr>{% empty %}<tr><td colspan="7" class="empty">本次没有报备人员</td></tr>{% endfor %}</tbody>
+</table></div></section>
+{% if not report.sent_at %}<form method="post" action="{% url 'police_report_confirm' report.pk %}" class="actions">{% csrf_token %}<button class="button primary" type="submit">确认本次报备已发送</button></form>{% endif %}
+{% if auto_download %}<script>document.getElementById("report-download").click();</script>{% endif %}
+{% endblock %}

@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}批量登记押金 - 悦山公寓运营{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div><h1>批量登记押金</h1><p>勾选已收到押金的房间，按每户尚未登记的金额补齐收款。</p></div>
+  <div class="actions"><a class="button" href="{% url 'payment_create' %}?category=deposit">单独登记押金</a><a class="button" href="{% url 'bill_list' %}?category=deposit">押金账单</a></div>
+</section>
+<section class="bill-summary-band" aria-label="押金概况">
+  <div class="bill-summary-item"><span>已收齐</span><strong>{{ paid_count }} 户</strong></div>
+  <div class="bill-summary-item bill-summary-alert"><span>未收齐 / 待登记</span><strong>{{ open_count }} 户</strong></div>
+  <div class="bill-summary-item"><span>已登记实收</span><strong>¥{{ total_paid }}</strong></div>
+  <div class="bill-summary-item bill-summary-alert"><span>尚待收取或登记</span><strong>¥{{ total_balance }}</strong></div>
+</section>
+<form method="post" data-deposit-collection data-confirm="确认所选房间的押金已经实际收到？">
+  {% csrf_token %}
+  {% if form.errors %}<div class="message error" role="alert">{{ form.non_field_errors }}{% for field in form %}{% if field.errors %}<p>{{ field.label }}：{{ field.errors|striptags }}</p>{% endif %}{% endfor %}</div>{% endif %}
+  <div class="rent-collection-bar">
+    <label class="compact-field">{{ form.date.label }}{{ form.date }}</label>
+    <div class="rent-selection-actions"><button class="button" type="button" data-deposit-select="all">全选未收齐</button><button class="button" type="button" data-deposit-select="none">取消选择</button></div>
+    <strong class="rent-selection-summary" data-deposit-summary aria-live="polite">勾选房间后登记押金</strong>
+    <button class="button primary" type="submit" name="action" value="bulk">确认所选押金已收齐</button>
+  </div>
+  <p class="rent-help">未建账的合同默认每户押金 3500 元，可修改应交金额。已有押金账单沿用原金额；已登记的押金自动扣除，重复批量提交不会重复收款。仅展示当前合同，合同到期未退租的房间仍可登记。</p>
+  <div class="panel table-wrap rent-table-wrap">
+    <table class="rent-table">
+      <thead><tr><th>选择</th><th>房间 / 租客</th><th>应交押金</th><th>已收</th><th>待登记余款</th><th>押金状态</th><th>分笔登记</th></tr></thead>
+      <tbody>{% for row in deposit_rows %}
+        <tr class="rent-row rent-row-{{ row.status }}" data-deposit-row data-room="{{ row.room.number }}" data-paid="{{ row.paid }}" data-balance="{{ row.balance }}">
+          <td><label class="rent-select"><input type="checkbox" name="rows" value="{{ row.key }}" {% if row.selected %}checked{% endif %} {% if not row.can_record %}disabled{% endif %} aria-label="选择 {{ row.room.number }}"><span>{{ row.room.number }}</span></label></td>
+          <td><a class="rent-room-number" href="{% url 'room_detail' row.room.pk %}">{{ row.room.number }}</a><small>{{ row.person.name }}</small></td>
+          <td>{% if row.draft %}<label class="rent-draft-amount"><span class="sr-only">{{ row.amount_field.label }}</span>{{ row.amount_field }}</label>{% else %}<strong>¥{{ row.amount }}</strong>{% endif %}</td>
+          <td class="rent-paid-amount">¥{{ row.paid }}</td>
+          <td class="rent-outstanding"><strong data-deposit-balance>¥{{ row.balance }}</strong></td>
+          <td><span class="rent-state">{% if row.void %}账单已作废{% elif row.status == 'paid' %}已收齐{% elif row.status == 'partial' %}部分已收{% elif row.draft %}待登记{% else %}未收{% endif %}</span>{% if row.draft %}<small>保存时建立押金账单</small>{% endif %}{% if row.unallocated > 0 %}<small>已有押金收款 ¥{{ row.unallocated }}，保存时关联账单</small>{% endif %}</td>
+          <td>{% if row.can_record %}<div class="rent-single"><label><span class="sr-only">{{ row.room.number }} 本次押金实收</span><input class="input" type="number" name="partial_{{ row.key }}" min="0.01" step="0.01" value="{{ row.partial_amount }}" placeholder="本次实收" aria-label="{{ row.room.number }} 本次押金实收"></label><button class="button" type="submit" name="single_row" value="{{ row.key }}">记录本笔押金</button></div><small>填写实际金额，可分多笔登记；留空补齐余款</small>{% else %}<a href="{% url 'bill_list' %}?room={{ row.room.pk }}&category=deposit">查看 / 撤销记录</a>{% endif %}</td>
+        </tr>
+        {% empty %}<tr><td colspan="7" class="empty">暂无当前合同可登记押金。</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</form>
+{% endblock %}

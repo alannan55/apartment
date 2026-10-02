@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-head"><div><h1>更多工具</h1><p>导入、导出与费用设置。</p></div></section>
+<section class="tool-grid">
+  <article class="panel"><h2>费用设置</h2><p>自动生成产权方房租待付款。</p><a class="button" href="{% url 'property_rent_rule_list' %}">产权方房租</a><a class="button" href="{% url 'common_fees' %}">统一房间费用</a></article>
+  <article class="panel"><h2>批量导入</h2><p>用于初次接管公寓或批量补充当前资料。</p><a class="button" href="{% url 'export_import_template' %}">下载模板</a><a class="button" href="{% url 'import_workbook' %}">导入表格</a></article>
+  <article class="panel"><h2>对外资料</h2><p>预览内容后下载；报备包含全部在住和待报备退租人员，发送后确认本次报备。</p><a class="button" href="{% url 'agent_preview' %}">中介房态</a><a class="button" href="{% url 'agent_settings' %}">中介费用与挂牌价</a><a class="button" href="{% url 'police_preview' %}">警务报备</a></article>
+</section>
+{% endblock %}

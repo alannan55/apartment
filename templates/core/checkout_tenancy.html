@@ -11,6 +11,7 @@
   </div>
 </section>
 
+<section class="panel settlement-summary"><h2>退租结算参考</h2><p>实收押金 ¥{{ finance.deposit_received }} · 已收未退押金 ¥{{ finance.deposit_held }} · 到期欠款 ¥{{ finance.due }} · 预存余额 ¥{{ finance.prepaid }}</p><p>退还押金默认按实收未退金额填写。欠款、预存单独结算；此处保存应退金额后进入待付，不代表已经退款。</p></section>
 {% if tenancy.planned_move_out_date %}
   <section class="panel notice-panel">
     <div class="section-title">
@@ -26,7 +27,7 @@
 
 <section class="split">
   <form method="post" class="form-panel">
-    {% csrf_token %}
+    {% csrf_token %}<input type="hidden" name="next" value="{{ return_url }}">
     <input type="hidden" name="action" value="plan">
     <div class="section-title"><h2>保存预计退租</h2></div>
     {% if plan_form.non_field_errors %}
@@ -49,8 +50,8 @@
     </div>
   </form>
 
-  <form method="post" class="form-panel danger-zone">
-    {% csrf_token %}
+  <form method="post" class="form-panel danger-zone" data-confirm="确认住户已经搬走？本合同的在住人员将登记离开，退款会进入待付。">
+    {% csrf_token %}<input type="hidden" name="next" value="{{ return_url }}">
     <input type="hidden" name="action" value="actual">
     <div class="section-title"><h2>确认实际退租</h2></div>
     {% if actual_form.non_field_errors %}

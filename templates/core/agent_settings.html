@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}中介费用与价格配置 - 悦山公寓运营{% endblock %}
+{% block content %}
+<section class="page-head"><div><h1>中介费用与价格配置</h1><p>维护对外展示的费用标准、每间房的月租报价和佣金基数。</p></div><a class="button" href="{% url 'agent_preview' %}">返回预览</a></section>
+<form method="post" class="agent-settings-form">
+  {% csrf_token %}
+  <section class="form-panel">
+    <h2>统一展示费用</h2>
+    <p class="agent-help">填写后用于所有房源的中介图片；留空沿用每间房的费用。这里的费用不改变实际计费和账单。</p>
+    {{ form.non_field_errors }}
+    <div class="form-grid">{% for field in form %}{% include "core/partials/form_field.html" %}{% endfor %}</div>
+    <a href="{% url 'common_fees' %}">维护实际房间费用 →</a>
+  </section>
+  <section class="panel">
+    <h2>每间房挂牌价与佣金基数</h2><p class="agent-help">挂牌价单位为元/月，留空显示“价格面议”；佣金基数单位为元，可填 0。保存后同步房间资料，用于后续签约，现有合同的租金和佣金保持原金额。</p>
+    {{ prices.management_form }}{{ prices.non_form_errors }}
+    <div class="agent-price-grid">
+      {% for price_form in prices %}
+      <div class="agent-price-item">
+        {% for hidden in price_form.hidden_fields %}{{ hidden }}{{ hidden.errors }}{% endfor %}
+        {{ price_form.non_field_errors }}
+        <label for="{{ price_form.listing_price.id_for_label }}"><strong>{{ price_form.instance.number }}</strong><span>{{ price_form.room_status }}</span></label>
+        <p class="agent-room-features">朝向：{{ price_form.instance.orientation|default:'未填写' }} · {{ price_form.instance.floor|default:'楼层未填写' }}{% if price_form.instance.area %} · {{ price_form.instance.area|floatformat:'-2' }}㎡{% endif %}</p>
+        {% for field in price_form.visible_fields %}
+        <div class="agent-price-field">
+          <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+          {{ field }}
+          {% if field.errors %}<small class="field-error">{{ field.errors|striptags }}</small>{% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% empty %}<p class="agent-help">暂无房间，请先在房态页新增房间。</p>{% endfor %}
+    </div>
+  </section>
+  <div class="form-actions"><button class="button primary" type="submit">保存并预览房态</button><a class="button ghost" href="{% url 'agent_preview' %}">取消</a></div>
+</form>
+{% endblock %}

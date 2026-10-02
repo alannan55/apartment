@@ -4,25 +4,43 @@
 <section class="page-head">
   <div>
     <h1>{{ title }}</h1>
+    {% if form_note %}<p>{{ form_note }}</p>{% endif %}
   </div>
 </section>
 <form method="post" class="form-panel" {% if form.is_multipart %}enctype="multipart/form-data"{% endif %}>
   {% csrf_token %}
+  <input type="hidden" name="next" value="{{ return_url }}">
+  {% if form.name or form.person_name %}
+  <div class="person-search" data-person-search>
+    <label class="field"><span>复用已有人员信息</span><input type="search" class="input" placeholder="输入姓名、手机号或身份证查找" autocomplete="off"></label>
+    <div class="search-results" aria-live="polite"></div>
+  </div>
+  {% endif %}
   {% if form.non_field_errors %}
     <div class="form-errors">{{ form.non_field_errors }}</div>
   {% endif %}
+  {% if form.field_groups %}
+    {% for group in form.field_groups %}
+      {% if group.advanced %}<details class="advanced-options" {% if form.errors %}open{% endif %}><summary>{{ group.title }}</summary>
+      {% else %}<section class="form-section"><h2>{{ group.title }}</h2>{% endif %}
+      <div class="form-grid">{% for field in group.fields %}{% include "core/partials/form_field.html" %}{% endfor %}</div>
+      {% if group.advanced %}</details>{% else %}</section>{% endif %}
+    {% endfor %}
+  {% else %}
   <div class="form-grid">
     {% for field in form %}
-      <label class="field {% if field.field.widget.input_type == 'textarea' %}field-wide{% endif %}">
-        <span>{{ field.label }}</span>
-        {{ field }}
-        {% if field.errors %}<small class="field-error">{{ field.errors|striptags }}</small>{% endif %}
-      </label>
+      {% if not payment_preview or field.name != "category" and field.name != "tenancy" %}
+      {% include "core/partials/form_field.html" %}
+      {% endif %}
     {% endfor %}
   </div>
+  {% endif %}
+  {% if payment_preview %}<details class="advanced-options"><summary>指定押金或补交往期欠款</summary><div class="form-grid"><label class="field"><span>{{ form.category.label }}</span>{{ form.category }}{{ form.category.errors }}</label><label class="field"><span>{{ form.tenancy.label }}</span>{{ form.tenancy }}{{ form.tenancy.errors }}</label></div></details>{% endif %}
+  {% if payment_preview %}<aside class="calculation-preview" data-payment-preview aria-live="polite"><strong>收款抵扣预览</strong><p>填写金额、房间和日期后，显示本次抵扣明细。</p></aside>{% endif %}
+  {% if move_rent != None %}<aside class="calculation-preview" data-move-preview data-old-rent="{{ move_rent }}" aria-live="polite"></aside>{% endif %}
   <div class="form-actions">
     <button class="button primary" type="submit">{{ submit_label }}</button>
-    <a class="button ghost" href="{% url 'dashboard' %}">返回</a>
+    <a class="button ghost" href="{{ return_url }}">取消并返回</a>
   </div>
 </form>
 {% endblock %}

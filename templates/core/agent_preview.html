@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}中介房态 - 悦山公寓运营{% endblock %}
+{% block content %}
+<section class="page-head agent-page-head">
+  <div><h1>中介房态</h1><p>预览当前可租房源，保存图片即可发给中介。</p></div>
+  <div class="actions"><a class="button" href="{% url 'agent_settings' %}">费用与挂牌价</a><a class="button" href="{% url 'room_list' %}">返回房态</a></div>
+</section>
+<section class="agent-summary" aria-label="可出租房间统计">
+  <div><span class="agent-dot vacant"></span><strong>{{ vacant_count }}</strong><span>间空房 · 随时可看</span></div>
+  <div><span class="agent-dot expiring"></span><strong>{{ expiring_count }}</strong><span>间即将到期</span></div>
+  <span class="agent-date">更新 {{ today|date:"Y.m.d" }}</span>
+</section>
+<form method="get" class="panel agent-image-options">
+  <strong>图片内容</strong>
+  <input type="hidden" name="include_commission" value="0">
+  <label><input type="checkbox" name="include_commission" value="1"{% if include_commission %} checked{% endif %}> 包含佣金基数</label>
+  <input type="hidden" name="include_password" value="0">
+  <label><input type="checkbox" name="include_password" value="1"{% if include_password %} checked{% endif %}> 包含看房密码</label>
+  <button class="button" type="submit">更新图片</button>
+  <p>选择后点击“更新图片”，预览、保存、复制和分享均使用更新后的图片。</p>
+</form>
+<section class="panel agent-share-bar">
+  <div class="actions">
+    <a class="button primary" href="{{ agent_image_url }}">保存房态图片</a>
+    <button class="button" type="button" data-agent-copy hidden>复制房态图片</button>
+    <button class="button" type="button" data-agent-share data-image-url="{{ agent_image_url }}&amp;preview=1" data-filename="悦山公寓房态_{{ today|date:'Ymd' }}.png">分享图片到微信</button>
+  </div>
+  <p data-agent-share-status role="status">保存图片后可在微信发送；手机也可长按下方图片保存。{% if include_password %}空房图片包含看房密码。{% else %}当前图片不包含看房密码。{% endif %}</p>
+</section>
+<section class="panel export-preview agent-image-preview"><img src="{{ agent_image_url }}&amp;preview=1" alt="悦山公寓可出租房态：{{ vacant_count }}间空房、{{ expiring_count }}间即将到期，含房号、挂牌价、费用和看房说明"></section>
+{% endblock %}

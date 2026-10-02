@@ -11,10 +11,11 @@
     {% if room.status == "vacant" %}
       <a class="button primary" href="{% url 'room_contract_create' room.id %}">签约</a>
     {% endif %}
-    <a class="button" href="{% url 'payment_create' %}?room={{ room.id }}">收付款</a>
-    <a class="button" href="{% url 'charge_create' %}?room={{ room.id }}">新增账单</a>
+    <a class="button" href="{% url 'payment_create' %}?room={{ room.id }}">收款</a>
+    <a class="button" href="{% url 'charge_create' %}?room={{ room.id }}">增加待收</a>
     <a class="button" href="{% url 'person_create' %}?room={{ room.id }}">添加人员</a>
     {% if active_tenancy %}
+      {% if not active_tenancy.renewal %}<a class="button" href="{% url 'renew_tenancy' active_tenancy.id %}">续租</a>{% endif %}
       <a class="button" href="{% url 'move_tenancy' active_tenancy.id %}">换房</a>
       <a class="button" href="{% url 'checkout_tenancy' active_tenancy.id %}">退租</a>
     {% endif %}
@@ -24,12 +25,13 @@
 <section class="metric-grid">
   <article class="metric"><span>挂牌价</span><strong>{% if room.listing_price %}¥{{ room.listing_price }}{% else %}-{% endif %}</strong></article>
   <article class="metric"><span>佣金基数</span><strong>¥{{ room.commission_base }}</strong></article>
-  <article class="metric"><span>应交合计</span><strong>¥{{ charge_total }}</strong></article>
-  <article class="metric"><span>已交合计</span><strong>¥{{ payment_total }}</strong></article>
-  <article class="metric"><span>待付余额</span><strong>¥{{ balance }}</strong></article>
+  <article class="metric"><span>到期未收</span><strong>¥{{ finance.tenant_due }}</strong></article>
+  <article class="metric"><span>未来应收</span><strong>¥{{ finance.future_due }}</strong></article>
+  <article class="metric"><span>我方待付</span><strong>¥{{ finance.expense_due }}</strong></article>
   <article class="metric"><span>房间密码</span><strong>{{ room.room_password|default:"-" }}</strong></article>
 </section>
 
+<p class="balance-note">预存余额 ¥{{ finance.prepaid }}{% if tenancy_finance %} · 当前住户实收未退押金 ¥{{ tenancy_finance.deposit_held }}{% endif %}</p>
 <section class="split">
   <div class="panel">
     <div class="section-title"><h2>合同</h2></div>
@@ -43,12 +45,17 @@
       </div>
       <dl class="detail-list">
         <dt>租客</dt><dd><a href="{% url 'person_detail' active_tenancy.primary_person.id %}">{{ active_tenancy.primary_person.name }}</a></dd>
-        <dt>租期</dt><dd>{{ active_tenancy.start_date|date:"Y-m-d" }} 至 {{ active_tenancy.end_date|date:"Y-m-d" }}</dd>
+        <dt>收租周期</dt><dd>{{ active_tenancy.start_date|date:"Y-m-d" }} 至 {{ active_tenancy.end_date|date:"Y-m-d" }}</dd>
         <dt>预计退租</dt><dd>{{ active_tenancy.checkout_plan_text|default:"-" }}</dd>
         <dt>月租</dt><dd>¥{{ active_tenancy.monthly_rent }}</dd>
-        <dt>押金</dt><dd>¥{{ active_tenancy.deposit_amount }}</dd>
+        <dt>押金</dt><dd>{% if active_tenancy.deposit_amount is None %}待补{% else %}¥{{ active_tenancy.deposit_amount }}{% endif %}</dd>
+        <dt>账务</dt><dd>{% if active_tenancy.billing_enabled %}自动计费已启用{% else %}资料待补，自动计费未启用{% endif %}</dd>
         <dt>中介</dt><dd>{{ active_tenancy.broker|default:"-" }}</dd>
       </dl>
+    {% elif latest_tenancy.status == "upcoming" %}
+      <p>{{ latest_tenancy.primary_person.name }} 预订入住：{{ latest_tenancy.start_date|date:"Y-m-d" }} 至 {{ latest_tenancy.end_date|date:"Y-m-d" }}，月租 ¥{{ latest_tenancy.monthly_rent }}。</p>
+      <p>押金{% if latest_tenancy.deposit_amount is None %}待补{% else %} ¥{{ latest_tenancy.deposit_amount }}{% endif %}{% if not latest_tenancy.billing_enabled %}；账务资料待补，自动计费未启用{% endif %}。</p>
+      <a href="{% url 'tenancy_edit' latest_tenancy.id %}">修改合同</a>
     {% elif latest_tenancy %}
       <p class="empty">最近合同已结束：{{ latest_tenancy.primary_person.name }}，{{ latest_tenancy.end_date|date:"Y-m-d" }}。</p>
     {% else %}
@@ -72,12 +79,12 @@
               <td><a href="{% url 'person_detail' stay.person.id %}">{{ stay.person.name }}</a></td>
               <td>{{ stay.get_stay_type_display }}</td>
               <td>{{ stay.person.phone }}</td>
-              <td>{{ stay.start_date|date:"Y-m-d" }}{% if stay.end_date %} 至 {{ stay.end_date|date:"Y-m-d" }}{% endif %}</td>
+              <td>{% if stay.start_date %}{{ stay.start_date|date:"Y-m-d" }}{% else %}日期未提供{% endif %}{% if stay.end_date %}<small>预计至 {{ stay.end_date|date:"Y-m-d" }}</small>{% endif %}</td>
               <td class="row-actions">
                 <a href="{% url 'room_person_edit' room.id stay.id %}">修改</a>
                 <form method="post" action="{% url 'room_person_remove' room.id stay.id %}" class="inline-form">
                   {% csrf_token %}
-                  <button type="submit" class="link-button">移除</button>
+                  <button type="submit" class="link-button">登记离开</button>
                 </form>
               </td>
             </tr>
@@ -93,8 +100,8 @@
 {% if collection_charges %}
 <section class="panel">
   <div class="section-title">
-    <h2>本期待收</h2>
-    <a href="{% url 'bill_list' %}">账单</a>
+    <h2>待收明细（含未来费用）</h2>
+    <a href="{% url 'bill_list' %}?room={{ room.id }}">全部待收</a>
   </div>
   <div class="table-wrap">
     <table>
@@ -135,7 +142,7 @@
 <section class="panel">
   <div class="section-title">
     <h2>流水明细</h2>
-    <a href="{% url 'charge_create' %}?room={{ room.id }}">新增账单</a>
+    <a href="{% url 'charge_create' %}?room={{ room.id }}">增加待收</a>
   </div>
   {% include "core/partials/ledger_table.html" with ledger_rows=ledger_rows %}
 </section>

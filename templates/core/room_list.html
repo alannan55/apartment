@@ -3,30 +3,49 @@
 {% block content %}
 <section class="page-head room-page-head">
   <div>
-    <h1>房间总览</h1>
-    <p>共 {{ room_rows|length }} 间，按房间号排列。房态、住户和账务集中展示。</p>
+    <h1>房态总览</h1>
+    <p>共 {{ total_rooms }} 间 · 当前显示 {{ room_rows|length }} 间。点击房间卡片即可办理日常业务。</p>
   </div>
   <div class="actions">
-    <a class="button primary" href="{% url 'room_create' %}">新增房间</a>
-    <a class="button" href="{% url 'export_agent_rooms' %}">导出中介房态</a>
-    <a class="button" href="{% url 'export_import_template' %}">下载导入模板</a>
-    <a class="button" href="{% url 'import_workbook' %}">导入表格</a>
+    <a class="button primary" href="{% url 'sign_contract' %}">办理入住</a>
+    <a class="button primary" href="{% url 'monthly_rent_collection' %}">按月收租</a>
+    <a class="button" href="{% url 'payment_create' %}?direction=receive">收款</a>
+    <a class="button" href="{% url 'deposit_collection' %}">批量登记押金</a>
+    <a class="button" href="{% url 'payment_create' %}?direction=pay">记支出</a>
+    <a class="button" href="{% url 'agent_preview' %}">中介房态</a>
+    <a class="button" href="{% url 'police_preview' %}">生成报备表</a>
+    <a class="button" href="{% url 'room_create' %}">新增房间</a>
   </div>
 </section>
 
+{% if pending_billing_count %}<p class="balance-note">{{ pending_billing_count }} 份合同自动计费未启用，可先用“按月收租”登记房租。补齐押金、期初收付款和计费起点后，可在修改合同中启用自动计费。</p>{% endif %}
+<section class="todo-strip" aria-label="需要处理">
+  <a href="{% url 'bill_list' %}?timing=overdue&status=open">逾期未交 <strong>{{ overdue_rooms }} 户</strong></a>
+  <a href="{% url 'tenancy_list' %}?scope=expiring">到期需处理 <strong>{{ expiring_count }} 份</strong></a>
+  <a href="{% url 'bill_list' %}?direction=expense&timing=due&status=open">到期待付 <strong>{{ payable_count }} 笔</strong></a>
+</section>
+<form method="get" class="list-filter">
+  <input type="search" class="input" name="q" value="{{ q }}" placeholder="搜索房号、姓名、电话" aria-label="搜索房间">
+  <select class="input" name="status" aria-label="房态筛选">
+    <option value="all">全部房间</option>
+    <option value="debt" {% if selected_status == 'debt' %}selected{% endif %}>有到期欠款</option>
+    {% for item in status_summaries %}<option value="{{ item.value }}" {% if selected_status == item.value %}selected{% endif %}>{{ item.label }}（{{ item.count }}）</option>{% endfor %}
+  </select>
+  <button class="button" type="submit">查找</button><a href="{% url 'room_list' %}">重置</a>
+</form>
 <section class="room-summary" aria-label="房间概况">
   <div class="room-status-summary">
     {% for item in status_summaries %}
       {% if item.count %}
-        <span class="room-summary-item">
+        <a class="room-summary-item room-summary-{{ item.value }}" href="?status={{ item.value }}">
           <i class="room-status-dot room-status-dot-{{ item.value }}"></i>
           {{ item.label }} <strong>{{ item.count }}</strong>
-        </span>
+        </a>
       {% endif %}
     {% endfor %}
   </div>
   <div class="room-money-summary">
-    <span>住户欠款 <strong class="{% if total_due > 0 %}amount-warn{% endif %}">¥{{ total_due }}</strong></span>
+    <span>到期未收 <strong class="{% if total_due > 0 %}amount-warn{% endif %}">¥{{ total_due }}</strong></span>
     <span>预收 <strong class="{% if total_prepaid > 0 %}amount-good{% endif %}">¥{{ total_prepaid }}</strong></span>
   </div>
 </section>
@@ -60,7 +79,9 @@
               <strong>¥{{ tenancy.monthly_rent }}/月</strong>
             </div>
             <div class="room-contract-date">
-              {% if tenancy.planned_move_out_date %}
+              {% if row.renewal %}<span>已续租至 {{ row.renewal.end_date|date:"Y-m-d" }}</span>
+              {% elif row.expired %}<span class="date-alert">合同已到期 · 尚未退租</span>
+              {% elif tenancy.planned_move_out_date %}
                 <span class="date-alert">预计退租 {{ tenancy.planned_move_out_date|date:"Y-m-d" }}</span>
               {% else %}
                 <span>合同至 {{ tenancy.end_date|date:"Y-m-d" }}</span>
@@ -77,7 +98,7 @@
           {% else %}
             <div class="room-vacant-copy">
               <strong>{% if room.status == "vacant" %}当前可签约{% else %}暂无在住人员{% endif %}</strong>
-              <span>可进入房间详情维护信息</span>
+              <span>{% if room.status == "vacant" %}可直接办理入住或登记人员{% else %}可修改房间状态或查看详情{% endif %}</span>
             </div>
           {% endif %}
           {% if people and tenancy %}
@@ -91,11 +112,14 @@
         <div class="room-finance {% if finance.tenant_due > 0 or finance.expense_due > 0 %}room-finance-alert{% endif %}">
           <div class="room-finance-main">
             {% if finance.tenant_due > 0 %}
-              <span>住户欠款</span>
-              <strong>¥{{ finance.tenant_due }}</strong>
+              <span>到期未收</span>
+              <a class="amount-warn" href="{% url 'bill_list' %}?room={{ room.id }}&timing=due&status=open"><strong>¥{{ finance.tenant_due }}</strong></a>
+            {% elif tenancy and not tenancy.billing_enabled and not finance.has_receivables %}
+              <span>房租记录</span>
+              <a href="{% url 'monthly_rent_collection' %}"><strong>待登记</strong></a>
             {% else %}
-              <span>住户账务</span>
-              <strong class="amount-good">正常</strong>
+              <span>到期账务</span>
+              <strong class="amount-good">已交齐</strong>
             {% endif %}
           </div>
           <div class="room-finance-detail">
@@ -103,22 +127,31 @@
             {% if finance.deposit_due > 0 %}<span>押金 ¥{{ finance.deposit_due }}</span>{% endif %}
             {% if finance.heating_due > 0 %}<span>取暖 ¥{{ finance.heating_due }}</span>{% endif %}
             {% if finance.other_due > 0 %}<span>其它 ¥{{ finance.other_due }}</span>{% endif %}
+            {% if finance.future_due > 0 %}<span>未来应收 ¥{{ finance.future_due }}</span>{% endif %}
             {% if finance.prepaid > 0 %}<span class="amount-good">预收 ¥{{ finance.prepaid }}</span>{% endif %}
             {% if finance.expense_due > 0 %}<span class="amount-warn">待付 ¥{{ finance.expense_due }}</span>{% endif %}
-            {% if finance.tenant_due == 0 and finance.prepaid == 0 and finance.expense_due == 0 %}<span>暂无待处理款项</span>{% endif %}
+            {% if tenancy and not tenancy.billing_enabled and not finance.has_receivables %}<span>可按月登记房租收款</span>{% elif finance.tenant_due == 0 and finance.prepaid == 0 and finance.expense_due == 0 %}<span>暂无待处理款项</span>{% endif %}
           </div>
         </div>
 
         <footer class="room-card-actions">
+          {% if room.status == 'vacant' %}<a class="primary-action" href="{% url 'room_contract_create' room.id %}">办理入住</a>{% else %}<a class="primary-action" href="{% url 'payment_create' %}?room={{ room.id }}">收款</a>{% endif %}
+          <a href="{% url 'person_list' %}?room={{ room.id }}">人员</a>
           <a href="{% url 'room_detail' room.id %}">详情</a>
-          <a href="{% url 'room_edit' room.id %}">修改</a>
-          <a href="{% url 'person_create' %}?room={{ room.id }}">人员</a>
-          <a href="{% url 'payment_create' %}?room={{ room.id }}">收付款</a>
+          <details class="card-more"><summary>操作</summary><div>
+            <a href="{% url 'person_create' %}?room={{ room.id }}">登记人员</a>
+            {% if tenancy %}
+              {% if not row.renewal %}<a href="{% url 'renew_tenancy' tenancy.id %}">续租</a>{% endif %}
+              <a href="{% url 'move_tenancy' tenancy.id %}">换房</a>
+              <a href="{% url 'checkout_tenancy' tenancy.id %}">退租</a>
+            {% endif %}
+            <a href="{% url 'room_edit' room.id %}">修改房间</a>
+          </div></details>
         </footer>
       </article>
     {% endwith %}
   {% empty %}
-    <div class="panel empty room-empty">暂无房间</div>
+    <div class="panel empty room-empty">没有符合条件的房间，可以修改筛选或新增房间</div>
   {% endfor %}
 </section>
 {% endblock %}
