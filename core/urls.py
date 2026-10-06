@@ -46,6 +46,7 @@ urlpatterns = [
     path("payments/<int:pk>/edit/", views.payment_edit, name="payment_edit"),
     path("payments/<int:pk>/delete/", views.payment_delete, name="payment_delete"),
     path("bills/", views.bill_list, name="bill_list"),
+    path("bills/entry/new/", views.accounting_entry, name="accounting_entry"),
     path("bills/monthly-rent/", views.monthly_rent_collection, name="monthly_rent_collection"),
     path("bills/deposits/", views.deposit_collection_view, name="deposit_collection"),
     path("bills/settle/", views.bill_settle, name="bill_settle"),

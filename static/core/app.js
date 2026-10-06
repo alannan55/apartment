@@ -56,7 +56,7 @@
       rows.forEach(row => {
         const draft = row.querySelector('[name^="rent_amount_"]');
         if (draft) {
-          const cents = Math.round(Number(draft.value) * 100);
+          const cents = Math.round(Number(draft.value) * 100) + Math.round(Number(row.dataset.otherBalance || 0) * 100);
           row.dataset.balance = formatMoney(Number.isFinite(cents) ? cents : 0);
           row.querySelector('[data-rent-balance]').textContent = '¥' + row.dataset.balance;
         }
@@ -155,6 +155,21 @@
     update();
   }
 
+  document.querySelectorAll('[data-lease-months]').forEach(button => {
+    button.addEventListener('click', () => {
+      const start = document.getElementById('id_start_date');
+      const end = document.getElementById('id_end_date');
+      if (!start.value) { start.focus(); start.reportValidity(); return; }
+      const [year, month, day] = start.value.split('-').map(Number);
+      const target = new Date(Date.UTC(year, month - 1 + Number(button.dataset.leaseMonths), 1));
+      const lastDay = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
+      target.setUTCDate(Math.min(day, lastDay) - 1);
+      end.value = target.toISOString().slice(0, 10);
+      end.dispatchEvent(new Event('input', {bubbles: true}));
+      end.dispatchEvent(new Event('change', {bubbles: true}));
+    });
+  });
+
   const stayType = document.getElementById('id_stay_type');
   if (stayType) {
     const update = () => {
@@ -237,10 +252,10 @@
         data.people.forEach(person => {
           const button = document.createElement('button');
           button.type = 'button'; button.className = 'button';
-          button.textContent = `${person.name} · ${person.phone || '未填电话'} · 证件尾号 ${person.id_number.slice(-4)}`;
+          button.textContent = `${person.name} · ${person.phone || '未填电话'} · 证件尾号 ${person.id_number.slice(-4)} · ${person.occupancy || ''}`;
           button.addEventListener('click', () => {
             Object.entries(person).forEach(([name, value]) => {
-              if (name === 'id') return;
+              if (name === 'id' || name === 'occupancy') return;
               const field = document.getElementById('id_' + name) || (name === 'name' && document.getElementById('id_person_name'));
               if (field) { field.value = value || ''; field.dispatchEvent(new Event('input', {bubbles: true})); }
             });

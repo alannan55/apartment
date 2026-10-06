@@ -9,18 +9,19 @@ from .models import Charge, Payment, Tenancy
 from .services import CYCLE_MONTHS, billing_end_for_tenancy, rent_charge_spec
 
 
-def monthly_rent_rows(month):
+def monthly_rent_rows(month, include_heating=False):
     end = month_end(month)
     charges = Charge.objects.filter(
-        direction=Charge.Direction.INCOME, category=Charge.Category.RENT,
+        direction=Charge.Direction.INCOME, category__in=[Charge.Category.RENT, Charge.Category.HEATING] if include_heating else [Charge.Category.RENT],
     ).filter(
         Q(period_start__range=(month, end))
         | Q(period_start__isnull=True, due_date__range=(month, end))
-    ).select_related("tenancy", "room", "person").prefetch_related("allocations")
+    ).select_related("tenancy", "room", "person").prefetch_related("allocations", "adjustments")
     grouped = {}
     billed_tenancies = set()
     for charge in charges:
-        billed_tenancies.add(charge.tenancy_id)
+        if charge.category == Charge.Category.RENT:
+            billed_tenancies.add(charge.tenancy_id)
         if charge.status == Charge.Status.VOID or not charge.room_id:
             continue
         key = f"tenancy-{charge.tenancy_id}" if charge.tenancy_id else f"room-{charge.room_id}"
@@ -50,12 +51,16 @@ def monthly_rent_rows(month):
         if cursor > min(end, billing_end_for_tenancy(tenancy)):
             continue
         key = f"tenancy-{tenancy.pk}"
-        grouped[key] = dict(
+        draft_row = dict(
             key=key, tenancy=tenancy, room=tenancy.room, person=tenancy.primary_person,
             charges=[], draft=rent_charge_spec(
                 tenancy, cursor, first_month=cursor == tenancy.start_date and billing_start <= tenancy.start_date,
             ),
         )
+        if key in grouped:
+            grouped[key]["draft"] = draft_row["draft"]
+        else:
+            grouped[key] = draft_row
 
     prepaid = {}
     receipts = Payment.objects.filter(
@@ -65,12 +70,14 @@ def monthly_rent_rows(month):
     for receipt in receipts:
         prepaid[receipt.tenancy_id] = prepaid.get(receipt.tenancy_id, Decimal("0.00")) + receipt.unallocated_amount
     for row in grouped.values():
-        row["amount"] = money(row["draft"]["amount"] if row["draft"] else sum(
+        row["amount"] = money((row["draft"]["amount"] if row["draft"] else 0) + sum(
             (charge.amount for charge in row["charges"]), Decimal("0.00"),
         ))
         row["paid"] = money(sum((charge.allocated_amount for charge in row["charges"]), Decimal("0.00")))
         row["balance"] = money(row["amount"] - row["paid"])
         row["prepaid"] = money(prepaid.get(row["tenancy"].pk, 0)) if row["tenancy"] else Decimal("0.00")
         row["status"] = "paid" if row["balance"] <= 0 else "partial" if row["paid"] else "open"
-        row["periods"] = [row["draft"]] if row["draft"] else row["charges"]
+        row["periods"] = ([row["draft"]] if row["draft"] else []) + row["charges"]
+        row["heating_charges"] = [c for c in row["charges"] if c.category == Charge.Category.HEATING]
+        row["other_balance"] = money(row["balance"] - (row["draft"]["amount"] if row["draft"] else 0))
     return sorted(grouped.values(), key=lambda row: row["room"].number)

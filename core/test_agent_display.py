@@ -1,6 +1,7 @@
 from datetime import date
 from decimal import Decimal
 from io import BytesIO
+from itertools import product
 from unittest.mock import patch
 
 from django.test import TestCase
@@ -26,6 +27,7 @@ class AgentDisplayTests(TestCase):
             "agent_water_fee": "10元/吨", "agent_electricity_fee": "1.5元/度",
             "agent_property_fee": "免", "agent_internet_fee": "60元/月",
             "agent_heating_fee": "400", "agent_parking_fee": "180",
+            "contact-name": "张小姐", "contact-phone": "18518699513",
             "prices-TOTAL_FORMS": "1", "prices-INITIAL_FORMS": "1",
             "prices-0-id": str(self.room.pk), "prices-0-listing_price": "3250.50",
             "prices-0-commission_base": "1850.50",
@@ -189,39 +191,71 @@ class AgentDisplayTests(TestCase):
         image.verify()
 
     def test_image_options_control_rendered_content_in_all_combinations(self):
-        for include_commission in (False, True):
-            for include_password in (False, True):
-                with self.subTest(commission=include_commission, password=include_password):
-                    options = dict(include_commission=include_commission, include_password=include_password)
-                    data = agent_room_status_data(**options)
-                    self.assertEqual(bool(data["room_rows"][0]["commission"]), include_commission)
-                    self.assertEqual("123456#" in str(data), include_password)
-                    with patch("core.exports.ImageDraw.ImageDraw.text") as draw_text:
-                        image = Image.open(BytesIO(agent_room_status_image(**options)))
-                        image.verify()
-                    rendered_text = "\n".join(str(call.args[1]) for call in draw_text.call_args_list)
-                    self.assertEqual("佣金基数 ¥2000" in rendered_text, include_commission)
-                    self.assertEqual("看房密码：123456#" in rendered_text, include_password)
-                    self.assertIn("¥3000", rendered_text)
+        for commission, password, contact in product((False, True), repeat=3):
+            with self.subTest(commission=commission, password=password, contact=contact):
+                options = dict(include_commission=commission, include_password=password, include_contact=contact)
+                data = agent_room_status_data(**options)
+                self.assertEqual(bool(data["room_rows"][0]["commission"]), commission)
+                self.assertEqual("123456#" in str(data), password)
+                self.assertEqual(data["contact_text"], "张小姐 18518699513" if contact else "")
+                with patch("core.exports.ImageDraw.ImageDraw.text") as draw_text:
+                    image = Image.open(BytesIO(agent_room_status_image(**options)))
+                    image.verify()
+                rendered_text = "\n".join(str(call.args[1]) for call in draw_text.call_args_list)
+                self.assertEqual("佣金基数 ¥2000" in rendered_text, commission)
+                self.assertEqual("看房密码：123456#" in rendered_text, password)
+                self.assertEqual("联系看房：张小姐 18518699513" in rendered_text, contact)
+                self.assertIn("¥3000", rendered_text)
 
     def test_preview_download_and_share_use_same_options(self):
-        for commission in (0, 1):
-            for password in (0, 1):
-                with self.subTest(commission=commission, password=password):
-                    query = f"include_commission={commission}&include_password={password}"
-                    response = self.client.get(f"/exports/agent-preview/?{query}")
-                    self.assertEqual(response.context["include_commission"], bool(commission))
-                    self.assertEqual(response.context["include_password"], bool(password))
-                    image_url = f"/exports/agent-room-status.png?{query}"
-                    self.assertEqual(response.context["agent_image_url"], image_url)
-                    html_url = image_url.replace("&", "&amp;")
-                    self.assertContains(response, f'href="{html_url}"')
-                    self.assertContains(response, f'src="{html_url}&amp;preview=1"')
-                    self.assertContains(response, f'data-image-url="{html_url}&amp;preview=1"')
-                    with patch("core.exports.agent_room_status_image", return_value=b"png") as renderer:
-                        exported = self.client.get(image_url)
-                        renderer.assert_called_once_with(None, include_commission=bool(commission), include_password=bool(password))
-                        self.assertEqual(exported.content, b"png")
+        for commission, password, contact in product((0, 1), repeat=3):
+            with self.subTest(commission=commission, password=password, contact=contact):
+                query = f"include_commission={commission}&include_password={password}&include_contact={contact}"
+                response = self.client.get(f"/exports/agent-preview/?{query}")
+                self.assertEqual(response.context["include_commission"], bool(commission))
+                self.assertEqual(response.context["include_password"], bool(password))
+                self.assertEqual(response.context["include_contact"], bool(contact))
+                image_url = f"/exports/agent-room-status.png?{query}"
+                self.assertEqual(response.context["agent_image_url"], image_url)
+                html_url = image_url.replace("&", "&amp;")
+                self.assertContains(response, f'href="{html_url}"')
+                self.assertContains(response, f'src="{html_url}&amp;preview=1"')
+                self.assertContains(response, f'data-image-url="{html_url}&amp;preview=1"')
+                with patch("core.exports.agent_room_status_image", return_value=b"png") as renderer:
+                    exported = self.client.get(image_url)
+                    renderer.assert_called_once_with(None, include_commission=bool(commission), include_password=bool(password), include_contact=bool(contact))
+                    self.assertEqual(exported.content, b"png")
         default = self.client.get("/exports/agent-preview/")
         self.assertTrue(default.context["include_commission"])
         self.assertTrue(default.context["include_password"])
+        self.assertTrue(default.context["include_contact"])
+
+    def test_contact_defaults_customization_and_blank_values(self):
+        response = self.client.get("/exports/agent-settings/")
+        self.assertContains(response, 'value="张小姐"')
+        self.assertContains(response, 'value="18518699513"')
+        response = self.client.post("/exports/agent-settings/", self.payload(**{
+            "contact-name": "李先生", "contact-phone": "13800138000",
+        }))
+        self.assertRedirects(response, "/exports/agent-preview/")
+        self.assertEqual(agent_room_status_data()["contact_text"], "李先生 13800138000")
+        self.assertEqual(agent_room_status_data(include_contact=False)["contact_text"], "")
+        response = self.client.get("/exports/agent-settings/")
+        self.assertContains(response, 'value="李先生"')
+        self.assertContains(response, 'value="13800138000"')
+        self.client.post("/more/fees/", {"water_fee": "9.5/吨", "electricity_fee": "1.2/度",
+                          "property_fee": "免", "internet_fee": "免", "heating_fee": "380", "parking_fee": "150"})
+        self.assertEqual(agent_room_status_data()["contact_text"], "李先生 13800138000")
+        self.client.post("/exports/agent-settings/", self.payload(**{"contact-name": "", "contact-phone": ""}))
+        self.assertEqual(agent_room_status_data()["contact_text"], "")
+        with patch("core.exports.ImageDraw.ImageDraw.text") as draw_text:
+            agent_room_status_image()
+        self.assertNotIn("联系看房", "\n".join(str(call.args[1]) for call in draw_text.call_args_list))
+
+    def test_invalid_contact_does_not_save_partial_settings_or_prices(self):
+        response = self.client.post("/exports/agent-settings/", self.payload(**{"contact-name": "张" * 81}))
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.context["contact_form"].errors)
+        self.assertFalse(ApartmentSettings.objects.exists())
+        self.room.refresh_from_db()
+        self.assertEqual(self.room.listing_price, 3000)

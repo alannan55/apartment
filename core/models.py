@@ -17,6 +17,11 @@ class ApartmentSettings(models.Model):
     fee_defaults = models.JSONField(default=dict)
 
 
+class BillingCheckpoint(models.Model):
+    completed_on = models.DateField(null=True)
+    through_date = models.DateField(null=True)
+
+
 class Room(models.Model):
     class Status(models.TextChoices):
         VACANT = "vacant", "空房"
@@ -162,6 +167,7 @@ class Tenancy(models.Model):
     planned_move_out_note = models.TextField("预计退租备注", blank=True)
     move_out_date = models.DateField("实际退租日期", null=True, blank=True)
     monthly_rent = models.DecimalField("月租金", max_digits=10, decimal_places=2, validators=[MinValueValidator(0)])
+    fee_terms = models.JSONField("合同费用约定", default=dict, blank=True)
     payment_cycle = models.CharField("付款周期", max_length=20, choices=PaymentCycle.choices, default=PaymentCycle.MONTHLY)
     deposit_amount = models.DecimalField("押金", max_digits=10, decimal_places=2, default=Decimal("3500.00"), null=True, blank=True)
     broker = models.ForeignKey(Broker, verbose_name="中介", related_name="tenancies", null=True, blank=True, on_delete=models.SET_NULL)
@@ -222,7 +228,21 @@ class Tenancy(models.Model):
 
     def save(self, *args, **kwargs):
         self.clean()
+        if not self.fee_terms and self.room_id:
+            self.fee_terms = self.room_fee_terms(self.room)
+            if kwargs.get("update_fields") is not None:
+                kwargs["update_fields"] = set(kwargs["update_fields"]) | {"fee_terms"}
         return super().save(*args, **kwargs)
+
+    @staticmethod
+    def room_fee_terms(room):
+        return {name: str(getattr(room, name)) for name in (
+            "water_fee", "electricity_fee", "heating_fee", "property_fee", "internet_fee", "parking_fee",
+        )}
+
+    @property
+    def heating_amount(self):
+        return Decimal(self.fee_terms.get("heating_fee", str(self.room.heating_fee)))
 
     @property
     def room_status_date(self):
@@ -238,6 +258,8 @@ class Tenancy(models.Model):
 
     @property
     def balance(self):
+        if hasattr(self, "due_balance"):
+            return money(self.due_balance)
         charges = self.charges.filter(direction=Charge.Direction.INCOME, due_date__lte=timezone.localdate()).exclude(status=Charge.Status.VOID)
         return money(sum((charge.balance for charge in charges), Decimal("0.00")))
 
@@ -410,6 +432,7 @@ class Charge(models.Model):
     status = models.CharField("状态", max_length=20, choices=Status.choices, default=Status.OPEN)
     source = models.CharField("来源", max_length=20, choices=Source.choices, default=Source.AUTO)
     generated_key = models.CharField("生成键", max_length=120, unique=True, null=True, blank=True)
+    entry_token = models.UUIDField(null=True, blank=True, unique=True, editable=False)
     notes = models.TextField("备注", blank=True)
     created_at = models.DateTimeField("创建时间", auto_now_add=True)
 
@@ -426,11 +449,23 @@ class Charge(models.Model):
         return f"{self.get_direction_display()} {self.get_category_display()} {self.amount}"
 
     @property
-    def allocated_amount(self):
+    def cash_allocated_amount(self):
+        if hasattr(self, "_cash_total"):
+            return money(self._cash_total)
         if "allocations" in getattr(self, "_prefetched_objects_cache", {}):
             return money(sum((item.amount for item in self.allocations.all()), Decimal("0.00")))
         total = self.allocations.aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
         return money(total)
+
+    @property
+    def deposit_offset(self):
+        if hasattr(self, "_offset_total"):
+            return money(self._offset_total)
+        return money(sum((item.amount for item in self.adjustments.all() if item.adjustment_type == "deposit_deduction"), Decimal("0.00")))
+
+    @property
+    def allocated_amount(self):
+        return money(self.cash_allocated_amount + self.deposit_offset)
 
     @property
     def balance(self):
@@ -472,6 +507,7 @@ class Payment(models.Model):
     memo = models.CharField("备注", max_length=240, blank=True)
     auto_allocate = models.BooleanField("自动抵扣", default=True)
     created_at = models.DateTimeField("创建时间", auto_now_add=True)
+    entry_token = models.UUIDField(null=True, blank=True, unique=True, editable=False)
 
     class Meta:
         ordering = ["-date", "-id"]
@@ -483,6 +519,8 @@ class Payment(models.Model):
 
     @property
     def allocated_amount(self):
+        if hasattr(self, "_cash_total"):
+            return money(self._cash_total)
         if "allocations" in getattr(self, "_prefetched_objects_cache", {}):
             return money(sum((item.amount for item in self.allocations.all()), Decimal("0.00")))
         total = self.allocations.aggregate(total=Sum("amount"))["total"] or Decimal("0.00")

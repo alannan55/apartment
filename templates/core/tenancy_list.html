@@ -39,7 +39,7 @@
             <td class="row-actions">
               <a href="{% url 'room_detail' tenancy.room.id %}">房间</a>
               <a href="{% url 'tenancy_edit' tenancy.id %}">修改</a>
-              <a href="{% url 'payment_create' %}?room={{ tenancy.room.id }}">收付款</a>
+              <a href="{% url 'accounting_entry' %}?room={{ tenancy.room.id }}">收付款</a>
               {% if tenancy.status == "active" %}
                 {% if tenancy.renewal %}<span>已办理续租</span>{% else %}<a href="{% url 'renew_tenancy' tenancy.id %}">续租</a>{% endif %}
                 <a href="{% url 'move_tenancy' tenancy.id %}">换房</a>

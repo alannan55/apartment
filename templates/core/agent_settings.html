@@ -1,9 +1,15 @@
 {% extends "base.html" %}
 {% block title %}中介费用与价格配置 - 悦山公寓运营{% endblock %}
 {% block content %}
-<section class="page-head"><div><h1>中介费用与价格配置</h1><p>维护对外展示的费用标准、每间房的月租报价和佣金基数。</p></div><a class="button" href="{% url 'agent_preview' %}">返回预览</a></section>
+<section class="page-head"><div><h1>中介费用与价格配置</h1><p>维护联系方式、对外展示的费用标准、每间房的月租报价和佣金基数。</p></div><a class="button" href="{% url 'agent_preview' %}">返回预览</a></section>
 <form method="post" class="agent-settings-form">
   {% csrf_token %}
+  <section class="form-panel">
+    <h2>对外联系方式</h2>
+    <p class="agent-help">用于房态图片中的联系看房信息；是否展示可在图片预览页勾选。两项都留空时不展示联系方式。</p>
+    {{ contact_form.non_field_errors }}
+    <div class="form-grid">{% for field in contact_form %}{% include "core/partials/form_field.html" %}{% endfor %}</div>
+  </section>
   <section class="form-panel">
     <h2>统一展示费用</h2>
     <p class="agent-help">填写后用于所有房源的中介图片；留空沿用每间房的费用。这里的费用不改变实际计费和账单。</p>

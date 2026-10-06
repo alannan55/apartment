@@ -9,15 +9,16 @@ from .models import Charge, Payment, Tenancy
 from .services import allocate_payment_to_charges, create_charge, settle_charges, tenancy_family_ids
 
 
-def deposit_row(tenancy):
-    family = tenancy_family_ids(tenancy)
-    deposits = list(Charge.objects.filter(
-        tenancy_id__in=family, direction=Charge.Direction.INCOME, category=Charge.Category.DEPOSIT,
-    ).prefetch_related("allocations"))
+def deposit_row(tenancy, *, deposits=None, receipts=None):
+    if deposits is None or receipts is None:
+        family = tenancy_family_ids(tenancy)
+        deposits = list(Charge.objects.filter(
+            tenancy_id__in=family, direction=Charge.Direction.INCOME, category=Charge.Category.DEPOSIT,
+        ).prefetch_related("allocations", "adjustments"))
+        receipts = Payment.objects.filter(
+            tenancy_id__in=family, direction=Payment.Direction.RECEIVE, category=Payment.Category.DEPOSIT,
+        ).prefetch_related("allocations")
     charges = [charge for charge in deposits if charge.status != Charge.Status.VOID]
-    receipts = Payment.objects.filter(
-        tenancy_id__in=family, direction=Payment.Direction.RECEIVE, category=Payment.Category.DEPOSIT,
-    ).prefetch_related("allocations")
     unallocated = money(sum((receipt.unallocated_amount for receipt in receipts), Decimal("0.00")))
     allocated = money(sum((charge.allocated_amount for charge in charges), Decimal("0.00")))
     amount = money(sum((charge.amount for charge in charges), Decimal("0.00"))) if charges else money(
@@ -37,9 +38,21 @@ def deposit_row(tenancy):
 
 
 def deposit_rows():
-    return [deposit_row(tenancy) for tenancy in Tenancy.objects.filter(
+    from .queries import tenancy_families
+    tenancies = list(Tenancy.objects.filter(
         status=Tenancy.Status.ACTIVE, start_date__lte=timezone.localdate(),
-    ).select_related("room", "primary_person").order_by("room__number")]
+    ).select_related("room", "primary_person").order_by("room__number"))
+    families = tenancy_families()
+    ids = {pk for tenancy in tenancies for pk in families[tenancy.pk]}
+    deposits, receipts = {}, {}
+    for charge in Charge.objects.filter(tenancy_id__in=ids, direction="income", category="deposit").prefetch_related("allocations", "adjustments"):
+        deposits.setdefault(charge.tenancy_id, []).append(charge)
+    for receipt in Payment.objects.filter(tenancy_id__in=ids, direction="receive", category="deposit").prefetch_related("allocations"):
+        receipts.setdefault(receipt.tenancy_id, []).append(receipt)
+    return [deposit_row(tenancy,
+        deposits=[charge for pk in families[tenancy.pk] for charge in deposits.get(pk, [])],
+        receipts=[receipt for pk in families[tenancy.pk] for receipt in receipts.get(pk, [])],
+    ) for tenancy in tenancies]
 
 
 @transaction.atomic

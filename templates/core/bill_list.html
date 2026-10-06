@@ -1,28 +1,9 @@
 {% extends "base.html" %}
 {% block title %}账单 - 悦山公寓运营{% endblock %}
 {% block content %}
-<section class="page-head bill-page-head">
-  <div>
-    <h1>记账</h1>
-    <p>
-      {% if direction == "income" %}
-        全部待收按房间、月份展示，包含押金和临时费用。
-      {% else %}
-        全部待付集中处理，也可筛选中介佣金、押金退款和产权方房租。
-      {% endif %}
-    </p>
-  </div>
-  <div class="actions">
-    <a class="button primary" href="{% url 'monthly_rent_collection' %}{% if scope == 'month' %}?month={{ month_value }}{% endif %}">按月收租</a>
-    <a class="button primary" href="{% url 'payment_create' %}">收款</a>
-    <a class="button" href="{% url 'deposit_collection' %}">批量登记押金</a>
-    <a class="button" href="{% url 'payment_create' %}?direction=pay">记支出</a>
-    <a class="button" href="{% url 'charge_create' %}?direction=income">增加待收</a>
-    <a class="button" href="{% url 'charge_create' %}?direction=expense">增加待付</a>
-  </div>
-</section>
+{% include "core/partials/account_header.html" %}
 
-{% include "core/partials/account_nav.html" with accounting_tab=direction %}
+
 
 <section class="bill-summary-band">
   <div class="bill-summary-item">
@@ -44,7 +25,7 @@
 </section>
 
 <form method="get" class="list-filter bill-filters">
-  <input type="hidden" name="direction" value="{{ direction }}"><input type="hidden" name="room" value="{{ room_filter }}">
+  <label class="compact-field">收付方向<select class="input" name="direction"><option value="income" {% if direction == "income" %}selected{% endif %}>待收</option><option value="expense" {% if direction == "expense" %}selected{% endif %}>待付</option></select></label><input type="hidden" name="room" value="{{ room_filter }}">
   <input class="input" type="search" name="q" value="{{ q }}" placeholder="搜索房号、姓名、费用" aria-label="搜索账单">
   <select class="input" name="timing" aria-label="到期范围"><option value="all">全部日期</option><option value="overdue" {% if timing == 'overdue' %}selected{% endif %}>已逾期</option><option value="due" {% if timing == 'due' %}selected{% endif %}>到期未结</option><option value="future" {% if timing == 'future' %}selected{% endif %}>未来应收付</option></select>
 
@@ -90,8 +71,8 @@
         {% else %}
           <strong>公共账务</strong>
         {% endif %}
-        <span>{% if row.person %}{{ row.person.name }}{% else %}无关联人员{% endif %}</span>
-        {% if direction == "income" %}
+        <span>{% if row.person %}{{ row.person.name }}{% else %}公共或房间费用{% endif %}</span>{% if row.tenancy %}<small>合同 {{ row.tenancy.start_date|date:"Y-m-d" }} 至 {{ row.tenancy.end_date|date:"Y-m-d" }}{% if row.tenancy.status == "ended" %} · 历史合同{% endif %}</small>{% endif %}
+        {% if direction == "income" and row.balance > 0 %}
           <small>到期未收 ¥{{ row.cumulative_due }}</small>
         {% elif row.due_date %}
           <small>应付日期 {{ row.due_date|date:"Y-m-d" }}</small>
@@ -109,7 +90,7 @@
                 {% endif %}
               </span>
               <span>应收 ¥{{ component.amount }} · {{ component.due_date|date:"m-d" }} 到期</span>
-              <span>已收 ¥{{ component.paid_amount }}</span>
+              <span>已结 ¥{{ component.paid_amount }}{% if component.deposit_offset %}（含押金抵扣 ¥{{ component.deposit_offset }}）{% endif %}</span>
               {% if component.balance > 0 %}<b>未结 ¥{{ component.balance }}</b>{% endif %}
             </div>
           {% endfor %}
@@ -127,7 +108,7 @@
       <div class="bill-row-total">
         <span>{% if direction == "income" %}本期应收{% else %}本笔应付{% endif %}</span>
         <strong>¥{{ row.amount }}</strong>
-        <small>{% if direction == "income" %}已收{% else %}已付{% endif %} ¥{{ row.paid_amount }}</small>
+        <small>已结 ¥{{ row.paid_amount }}</small>
       </div>
 
       <div class="bill-row-actions">
@@ -137,12 +118,12 @@
             {% for charge_id in row.charge_ids %}<input type="hidden" name="charge_ids" value="{{ charge_id }}">{% endfor %}
             <button class="button primary" type="submit">{% if direction == "income" %}全额收{% else %}全额付{% endif %}</button>
           </form>
-          <form method="post" action="{% url 'bill_settle' %}" class="bill-partial-form">
-            {% csrf_token %}
-            {% for charge_id in row.charge_ids %}<input type="hidden" name="charge_ids" value="{{ charge_id }}">{% endfor %}
-            <input class="input" type="number" name="amount" min="0.01" max="{{ row.balance }}" step="0.01" placeholder="部分金额">
-            <button class="button" type="submit">{% if direction == "income" %}部分收{% else %}部分付{% endif %}</button>
-          </form>
+          <details><summary>分笔收付 / 补记日期</summary><form method="post" action="{% url 'bill_settle' %}" class="bill-dated-payment">
+            {% csrf_token %}{% for charge_id in row.charge_ids %}<input type="hidden" name="charge_ids" value="{{ charge_id }}">{% endfor %}
+            <label>实际金额<input class="input" type="number" name="amount" min="0.01" max="{{ row.balance }}" step="0.01" required placeholder="本次金额"></label>
+            <label>实际日期<input class="input" type="date" name="date" value="{% now 'Y-m-d' %}" required></label>
+            <button class="button" type="submit">记录本笔{% if direction == 'income' %}收款{% else %}付款{% endif %}</button>
+          </form></details>
         {% else %}
           <span class="bill-settled-label">已结清</span>
         {% endif %}

@@ -60,6 +60,7 @@
 <section class="panel">
   <div class="section-title"><h2>相关流水</h2></div>
   {% include "core/partials/ledger_table.html" with ledger_rows=ledger_rows %}
+  {% include "core/partials/pagination.html" %}
 </section>
 
 <section class="panel danger-zone">

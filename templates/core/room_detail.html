@@ -11,8 +11,7 @@
     {% if room.status == "vacant" %}
       <a class="button primary" href="{% url 'room_contract_create' room.id %}">签约</a>
     {% endif %}
-    <a class="button" href="{% url 'payment_create' %}?room={{ room.id }}">收款</a>
-    <a class="button" href="{% url 'charge_create' %}?room={{ room.id }}">增加待收</a>
+    <a class="button" href="{% url 'accounting_entry' %}?room={{ room.id }}">记一笔</a>
     <a class="button" href="{% url 'person_create' %}?room={{ room.id }}">添加人员</a>
     {% if active_tenancy %}
       {% if not active_tenancy.renewal %}<a class="button" href="{% url 'renew_tenancy' active_tenancy.id %}">续租</a>{% endif %}
@@ -25,13 +24,15 @@
 <section class="metric-grid">
   <article class="metric"><span>挂牌价</span><strong>{% if room.listing_price %}¥{{ room.listing_price }}{% else %}-{% endif %}</strong></article>
   <article class="metric"><span>佣金基数</span><strong>¥{{ room.commission_base }}</strong></article>
-  <article class="metric"><span>到期未收</span><strong>¥{{ finance.tenant_due }}</strong></article>
+  <article class="metric"><span>房间到期未收合计</span><strong>¥{{ finance.tenant_due }}</strong></article>
+  <article class="metric"><span>当前租客到期未收</span><strong>¥{{ finance.current_due }}</strong></article>
+  <article class="metric"><span>历史租客到期未收</span><strong>¥{{ finance.historical_due }}</strong></article>
   <article class="metric"><span>未来应收</span><strong>¥{{ finance.future_due }}</strong></article>
   <article class="metric"><span>我方待付</span><strong>¥{{ finance.expense_due }}</strong></article>
   <article class="metric"><span>房间密码</span><strong>{{ room.room_password|default:"-" }}</strong></article>
 </section>
 
-<p class="balance-note">预存余额 ¥{{ finance.prepaid }}{% if tenancy_finance %} · 当前住户实收未退押金 ¥{{ tenancy_finance.deposit_held }}{% endif %}</p>
+<p class="balance-note">预存余额 ¥{{ finance.prepaid }}{% if tenancy_finance %} · 当前住户实持押金 ¥{{ tenancy_finance.deposit_held }} · 已扣抵 ¥{{ tenancy_finance.deposit_used }} · 已退 ¥{{ tenancy_finance.deposit_refunded }}{% endif %}</p>
 <section class="split">
   <div class="panel">
     <div class="section-title"><h2>合同</h2></div>
@@ -47,7 +48,7 @@
         <dt>租客</dt><dd><a href="{% url 'person_detail' active_tenancy.primary_person.id %}">{{ active_tenancy.primary_person.name }}</a></dd>
         <dt>收租周期</dt><dd>{{ active_tenancy.start_date|date:"Y-m-d" }} 至 {{ active_tenancy.end_date|date:"Y-m-d" }}</dd>
         <dt>预计退租</dt><dd>{{ active_tenancy.checkout_plan_text|default:"-" }}</dd>
-        <dt>月租</dt><dd>¥{{ active_tenancy.monthly_rent }}</dd>
+        <dt>月租</dt><dd>¥{{ active_tenancy.monthly_rent }}</dd><dt>合同取暖费</dt><dd>¥{{ active_tenancy.heating_amount }}/月</dd><dt>合同水电</dt><dd>水 {{ active_tenancy.fee_terms.water_fee }} · 电 {{ active_tenancy.fee_terms.electricity_fee }}</dd>
         <dt>押金</dt><dd>{% if active_tenancy.deposit_amount is None %}待补{% else %}¥{{ active_tenancy.deposit_amount }}{% endif %}</dd>
         <dt>账务</dt><dd>{% if active_tenancy.billing_enabled %}自动计费已启用{% else %}资料待补，自动计费未启用{% endif %}</dd>
         <dt>中介</dt><dd>{{ active_tenancy.broker|default:"-" }}</dd>
@@ -142,9 +143,10 @@
 <section class="panel">
   <div class="section-title">
     <h2>流水明细</h2>
-    <a href="{% url 'charge_create' %}?room={{ room.id }}">增加待收</a>
+    <a href="{% url 'accounting_entry' %}?state=pending&room={{ room.id }}">记一笔</a>
   </div>
   {% include "core/partials/ledger_table.html" with ledger_rows=ledger_rows %}
+  {% include "core/partials/pagination.html" %}
 </section>
 
 <section class="panel">
@@ -176,6 +178,7 @@
   </div>
 </section>
 
+<section class="panel"><h2>历史合同与结算</h2>{% for contract in room.tenancies.all %}<details class="advanced-options"><summary>{{ contract.primary_person.name }} · {{ contract.start_date|date:"Y-m-d" }} 至 {{ contract.end_date|date:"Y-m-d" }} · 月租 ¥{{ contract.monthly_rent }}</summary><p>取暖费 ¥{{ contract.heating_amount }}/月 · {{ contract.get_status_display }}</p><a href="{% url 'accounting_entry' %}?room={{ room.pk }}&tenancy={{ contract.pk }}">为此合同记一笔</a>{% for item in contract.adjustments.all %}<p>{{ item.effective_date|date:"Y-m-d" }} · {{ item.get_adjustment_type_display }} ¥{{ item.amount }} · {{ item.description }}</p>{% endfor %}</details>{% endfor %}</section>
 <section class="panel danger-zone">
   <div class="section-title">
     <h2>危险操作</h2>

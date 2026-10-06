@@ -11,7 +11,7 @@
   </div>
 </section>
 
-<section class="panel settlement-summary"><h2>退租结算参考</h2><p>实收押金 ¥{{ finance.deposit_received }} · 已收未退押金 ¥{{ finance.deposit_held }} · 到期欠款 ¥{{ finance.due }} · 预存余额 ¥{{ finance.prepaid }}</p><p>退还押金默认按实收未退金额填写。欠款、预存单独结算；此处保存应退金额后进入待付，不代表已经退款。</p></section>
+<section class="panel settlement-summary"><h2>退租结算参考</h2><p>实收押金 ¥{{ finance.deposit_received }} · 已退 ¥{{ finance.deposit_refunded }} · 已扣抵 ¥{{ finance.deposit_used }} · 实持押金 ¥{{ finance.deposit_held }} · 到期欠款 ¥{{ finance.due }} · 预存余额 ¥{{ finance.prepaid }}</p><p>押金可以扣损坏费或抵到期欠款，剩余金额退还。预存单独结算；未勾选“已实际退还”的退款会列在待付。</p></section>
 {% if tenancy.planned_move_out_date %}
   <section class="panel notice-panel">
     <div class="section-title">
@@ -50,7 +50,7 @@
     </div>
   </form>
 
-  <form method="post" class="form-panel danger-zone" data-confirm="确认住户已经搬走？本合同的在住人员将登记离开，退款会进入待付。">
+  <form method="post" class="form-panel danger-zone" data-checkout-settlement data-held="{{ finance.deposit_held }}" data-confirm="确认住户已经搬走？本合同的在住人员将登记离开，退款会进入待付。">
     {% csrf_token %}<input type="hidden" name="next" value="{{ return_url }}">
     <input type="hidden" name="action" value="actual">
     <div class="section-title"><h2>确认实际退租</h2></div>
@@ -66,6 +66,7 @@
         </label>
       {% endfor %}
     </div>
+    <p class="calculation-preview" data-checkout-summary aria-live="polite"></p>
     <div class="form-actions">
       <button class="button danger" type="submit">确认已经退租</button>
     </div>

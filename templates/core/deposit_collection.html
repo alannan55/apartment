@@ -1,10 +1,8 @@
 {% extends "base.html" %}
 {% block title %}批量登记押金 - 悦山公寓运营{% endblock %}
 {% block content %}
-<section class="page-head">
-  <div><h1>批量登记押金</h1><p>勾选已收到押金的房间，按每户尚未登记的金额补齐收款。</p></div>
-  <div class="actions"><a class="button" href="{% url 'payment_create' %}?category=deposit">单独登记押金</a><a class="button" href="{% url 'bill_list' %}?category=deposit">押金账单</a></div>
-</section>
+{% include "core/partials/account_header.html" %}
+{% include "core/partials/collection_modes.html" %}
 <section class="bill-summary-band" aria-label="押金概况">
   <div class="bill-summary-item"><span>已收齐</span><strong>{{ paid_count }} 户</strong></div>
   <div class="bill-summary-item bill-summary-alert"><span>未收齐 / 待登记</span><strong>{{ open_count }} 户</strong></div>

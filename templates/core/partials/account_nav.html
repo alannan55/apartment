@@ -1,5 +1,5 @@
-<nav class="bill-module-tabs" aria-label="记账">
-  <a class="{% if accounting_tab == 'income' %}active{% endif %}" href="{% url 'bill_list' %}?direction=income">待收</a>
-  <a class="{% if accounting_tab == 'expense' %}active{% endif %}" href="{% url 'bill_list' %}?direction=expense">待付</a>
-  <a class="{% if accounting_tab == 'payments' %}active{% endif %}" href="{% url 'charge_list' %}">收支记录</a>
+<nav class="bill-module-tabs" aria-label="记账工作台">
+  <a class="{% if request.resolver_match.url_name == 'monthly_rent_collection' or request.resolver_match.url_name == 'deposit_collection' %}active{% endif %}" href="{% url 'monthly_rent_collection' %}">收租</a>
+  <a class="{% if request.resolver_match.url_name == 'bill_list' %}active{% endif %}" href="{% url 'bill_list' %}">待收待付</a>
+  <a class="{% if request.resolver_match.url_name == 'charge_list' %}active{% endif %}" href="{% url 'charge_list' %}">收支记录</a>
 </nav>

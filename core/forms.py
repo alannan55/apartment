@@ -73,7 +73,7 @@ class MonthlyRentCollectionForm(BaseFormMixin, forms.Form):
                 self.fields[name] = forms.DecimalField(
                     label=f"{row['room'].number} 本期应收", required=False,
                     min_value=Decimal("0.01"), max_digits=12, decimal_places=2,
-                    initial=row["amount"],
+                    initial=row["draft"]["amount"],
                 )
         self.apply_widget_attrs()
 
@@ -96,7 +96,25 @@ class DepositCollectionForm(BaseFormMixin, forms.Form):
         self.apply_widget_attrs()
 
 
-class SignContractForm(BaseFormMixin, forms.Form):
+class ContractFeeMixin:
+    def add_contract_fees(self, terms=None):
+        terms = terms or {}
+        fields = []
+        for name, label in [("heating_fee", "取暖费/月"), ("electricity_fee", "电费标准"), ("water_fee", "水费标准"), ("property_fee", "物业费"), ("internet_fee", "网费"), ("parking_fee", "停车费/月")]:
+            field = forms.DecimalField(max_digits=8, decimal_places=2, min_value=0, required=False) if name in {"heating_fee", "parking_fee"} else forms.CharField(max_length=80, required=False)
+            field.label = label
+            field.initial = terms.get(name)
+            field.help_text = "留空沿用原约定；新签合同沿用房间默认标准。"
+            self.fields[name] = field
+            fields.append(self[name])
+        self.contract_fee_fields = fields
+
+    @property
+    def cleaned_fee_terms(self):
+        return {field.name: str(self.cleaned_data[field.name]) for field in self.contract_fee_fields if self.cleaned_data.get(field.name) not in (None, "")}
+
+
+class SignContractForm(ContractFeeMixin, BaseFormMixin, forms.Form):
     room = forms.ModelChoiceField(label="房间", queryset=Room.objects.none())
     person_name = forms.CharField(label="主租客姓名", max_length=80)
     id_number = forms.CharField(label="身份证号", max_length=30)
@@ -138,6 +156,7 @@ class SignContractForm(BaseFormMixin, forms.Form):
         }
         for name, placeholder in placeholders.items():
             self.fields[name].widget.attrs.setdefault("placeholder", placeholder)
+        self.add_contract_fees(Tenancy.room_fee_terms(fixed_room) if fixed_room else {})
         self.apply_widget_attrs()
 
     def clean(self):
@@ -211,7 +230,7 @@ class PaymentForm(BaseFormMixin, forms.ModelForm):
         return cleaned
 
 
-class RenewalForm(BaseFormMixin, forms.Form):
+class RenewalForm(ContractFeeMixin, BaseFormMixin, forms.Form):
     end_date = forms.DateField(label="续租结束日期", widget=DateInput)
     monthly_rent = forms.DecimalField(label="新月租", max_digits=10, decimal_places=2, min_value=0)
     payment_cycle = forms.ChoiceField(label="付款周期", choices=Tenancy.PaymentCycle.choices)
@@ -219,7 +238,12 @@ class RenewalForm(BaseFormMixin, forms.Form):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.add_contract_fees()
         self.apply_widget_attrs()
+        self.field_groups = [
+            {"title": "续租约定", "advanced": False, "fields": [self[n] for n in ("end_date", "monthly_rent", "payment_cycle", "note")]},
+            {"title": "调整续租后的费用标准（可选）", "advanced": True, "fields": self.contract_fee_fields},
+        ]
 
 
 class BillPaymentEditForm(BaseFormMixin, forms.Form):
@@ -336,6 +360,15 @@ class AgentFeesForm(BaseFormMixin, forms.Form):
     agent_heating_fee = forms.DecimalField(label="取暖费（元/月）", max_digits=8, decimal_places=2, min_value=0, required=False)
     agent_parking_fee = forms.DecimalField(label="停车费（元/月）", max_digits=8, decimal_places=2, min_value=0, required=False)
     agent_parking_annual_fee = forms.DecimalField(label="停车费（元/包年）", max_digits=8, decimal_places=2, min_value=0, required=False, help_text="如 1440；留空只展示月付价格。")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.apply_widget_attrs()
+
+
+class AgentContactForm(BaseFormMixin, forms.Form):
+    name = forms.CharField(label="联系人", max_length=80, required=False)
+    phone = forms.CharField(label="联系电话", max_length=40, required=False, widget=forms.TextInput(attrs={"type": "tel"}))
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -496,7 +529,7 @@ class PersonStayForm(StayDetailsMixin, forms.Form):
         self.apply_widget_attrs()
 
 
-class TenancyEditForm(BaseFormMixin, forms.ModelForm):
+class TenancyEditForm(ContractFeeMixin, BaseFormMixin, forms.ModelForm):
     broker_name = forms.CharField(label="中介/渠道", max_length=100, required=False)
 
     class Meta:
@@ -537,6 +570,7 @@ class TenancyEditForm(BaseFormMixin, forms.ModelForm):
         super().__init__(*args, **kwargs)
         if self.instance and self.instance.pk and self.instance.broker:
             self.fields["broker_name"].initial = self.instance.broker.name
+        self.add_contract_fees(self.instance.fee_terms if self.instance.pk else {})
         self.apply_widget_attrs()
         self.fields["start_date"].label = "收租开始日期"
         self.fields["end_date"].label = "收租结束日期"
@@ -545,6 +579,7 @@ class TenancyEditForm(BaseFormMixin, forms.ModelForm):
         self.fields["police_report_end_date"].help_text = "留空自动生成；合同不足6个月时，报备期间统一为从合同开始日起1年，实际合同不变。"
         self.field_groups = [
             {"title": "房间与收租", "advanced": False, "fields": [self[n] for n in ("room", "primary_person", "start_date", "end_date", "monthly_rent", "payment_cycle")]},
+            {"title": "本合同费用约定", "advanced": True, "fields": self.contract_fee_fields},
             {"title": "独立报备日期（按需填写）", "advanced": True, "fields": [self[n] for n in ("police_report_start_date", "police_report_end_date")]},
             {"title": "押金与计费设置", "advanced": True, "fields": [self[n] for n in ("deposit_amount", "billing_start_date", "billing_enabled", "broker_name", "commission_manual_amount")]},
             {"title": "退租计划与补充说明", "advanced": True, "fields": [self[n] for n in ("status", "planned_move_out_date", "planned_deposit_refund_amount", "move_out_date", "planned_move_out_note", "notes")]},
@@ -561,6 +596,7 @@ class TenancyEditForm(BaseFormMixin, forms.ModelForm):
 
     def save(self, commit=True):
         tenancy = super().save(commit=False)
+        tenancy.fee_terms = {**tenancy.fee_terms, **self.cleaned_fee_terms}
         broker_name = self.cleaned_data.get("broker_name", "").strip()
         tenancy.broker = Broker.objects.get_or_create(name=broker_name)[0] if broker_name else None
         if tenancy.room_id and not tenancy.commission_base:
@@ -606,7 +642,7 @@ class ChargeEditForm(BaseFormMixin, forms.ModelForm):
 
     def clean(self):
         cleaned = super().clean()
-        if self.instance.pk and self.instance.allocations.exists():
+        if self.instance.pk and (self.instance.allocations.exists() or self.instance.deposit_offset):
             if cleaned.get("amount") is not None and cleaned["amount"] < self.instance.allocated_amount:
                 self.add_error("amount", "应收付金额不能小于已收付金额，请先修改对应流水。")
             if cleaned.get("status") == Charge.Status.VOID:
@@ -668,7 +704,10 @@ class MoveRoomForm(BaseFormMixin, forms.Form):
 
 class CheckoutForm(BaseFormMixin, forms.Form):
     checkout_date = forms.DateField(label="退租日期", widget=DateInput)
-    refund_deposit_amount = forms.DecimalField(label="退还押金", max_digits=10, decimal_places=2, min_value=0, initial=Decimal("3500.00"))
+    deposit_deduction_amount = forms.DecimalField(label="损坏等扣款", max_digits=10, decimal_places=2, min_value=0, required=False, initial=0)
+    deposit_offset_amount = forms.DecimalField(label="押金抵欠款", max_digits=10, decimal_places=2, min_value=0, required=False, initial=0)
+    refund_deposit_amount = forms.DecimalField(label="应退押金（留空自动计算）", max_digits=10, decimal_places=2, min_value=0, required=False)
+    refund_paid = forms.BooleanField(label="这笔押金已在退租当天实际退还", required=False)
     note = forms.CharField(label="退租备注", widget=forms.Textarea(attrs={"rows": 3}), required=False)
 
     def clean_checkout_date(self):
@@ -676,6 +715,12 @@ class CheckoutForm(BaseFormMixin, forms.Form):
         if value > timezone.localdate():
             raise forms.ValidationError("尚未搬走请保存预计退租，实际退租日期不能晚于今天。")
         return value
+
+    def clean(self):
+        data = super().clean()
+        if data.get("deposit_deduction_amount") and not data.get("note", "").strip():
+            self.add_error("note", "请说明损坏等押金扣款的原因。")
+        return data
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

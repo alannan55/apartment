@@ -16,6 +16,8 @@
   <label><input type="checkbox" name="include_commission" value="1"{% if include_commission %} checked{% endif %}> 包含佣金基数</label>
   <input type="hidden" name="include_password" value="0">
   <label><input type="checkbox" name="include_password" value="1"{% if include_password %} checked{% endif %}> 包含看房密码</label>
+  <input type="hidden" name="include_contact" value="0">
+  <label><input type="checkbox" name="include_contact" value="1"{% if include_contact %} checked{% endif %}> 展示联系方式</label>
   <button class="button" type="submit">更新图片</button>
   <p>选择后点击“更新图片”，预览、保存、复制和分享均使用更新后的图片。</p>
 </form>

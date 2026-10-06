@@ -1,0 +1,4 @@
+<nav class="collection-modes" aria-label="收款项目">
+  <a class="{% if request.resolver_match.url_name == 'monthly_rent_collection' %}active{% endif %}" href="{% url 'monthly_rent_collection' %}">每月房租</a>
+  <a class="{% if request.resolver_match.url_name == 'deposit_collection' %}active{% endif %}" href="{% url 'deposit_collection' %}">合同押金</a>
+</nav>

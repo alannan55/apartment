@@ -62,6 +62,7 @@
     </div>
   </section>
 
+  <details class="advanced-options" {% if form.errors %}open{% endif %}><summary>紧急联系人（选填）</summary>
   <section class="contract-section">
     <div class="contract-section-title">
       <h2>紧急联系人</h2>
@@ -85,11 +86,12 @@
       </label>
     </div>
   </section>
+  </details>
 
   <section class="contract-section">
     <div class="contract-section-title">
       <h2>合同周期</h2>
-      <p>如实填写实际租期</p>
+      <p>如实填写实际租期；快捷选项按开始日期计算，结束日包含在租期内。</p>
     </div>
     <div class="contract-fields">
       <label class="field">
@@ -100,6 +102,7 @@
       <label class="field">
         <span>{{ form.end_date.label }}</span>
         {{ form.end_date }}
+        <span class="term-shortcuts"><button type="button" class="button" data-lease-months="6">半年</button><button type="button" class="button" data-lease-months="12">一年</button></span>
         {% if form.end_date.errors %}<small class="field-error">{{ form.end_date.errors|striptags }}</small>{% endif %}
       </label>
       <label class="field">
@@ -126,14 +129,11 @@
         {{ form.deposit_amount }}
         {% if form.deposit_amount.errors %}<small class="field-error">{{ form.deposit_amount.errors|striptags }}</small>{% endif %}
       </label>
-      <label class="field">
-        <span>{{ form.first_month_discount.label }}</span>
-        {{ form.first_month_discount }}
-        {% if form.first_month_discount.errors %}<small class="field-error">{{ form.first_month_discount.errors|striptags }}</small>{% endif %}
-      </label>
+
     </div>
   </section>
 
+  <details class="advanced-options" {% if form.errors %}open{% endif %}><summary>中介渠道与佣金（选填）</summary>
   <section class="contract-section">
     <div class="contract-section-title">
       <h2>中介佣金</h2>
@@ -152,13 +152,20 @@
       </label>
     </div>
   </section>
+  </details>
 
+  <details class="advanced-options" {% if form.errors %}open{% endif %}><summary>特殊约定与备注（选填）</summary>
   <section class="contract-section">
     <div class="contract-section-title">
       <h2>备注</h2>
       <p>记录特殊约定或说明</p>
     </div>
     <div class="contract-fields">
+      <label class="field">
+        <span>{{ form.first_month_discount.label }}</span>
+        {{ form.first_month_discount }}
+        {% if form.first_month_discount.errors %}<small class="field-error">{{ form.first_month_discount.errors|striptags }}</small>{% endif %}
+      </label>
       <label class="field field-wide">
         <span>{{ form.notes.label }}</span>
         {{ form.notes }}
@@ -166,7 +173,9 @@
       </label>
     </div>
   </section>
+  </details>
 
+  <details class="advanced-options" {% if form.errors %}open{% endif %}><summary>本合同费用约定（水电、取暖等）</summary><div class="form-grid">{% for field in form.contract_fee_fields %}{% include "core/partials/form_field.html" %}{% endfor %}</div></details>
   <details class="roommates-section" {% if roommates.total_error_count %}open{% endif %}><summary>同时登记同住人员（可选）</summary><section class="contract-section"><div class="contract-section-title"><h2>同住人员</h2><p>每人一份资料，与主租客一起登记入住。</p></div><div>
     {{ roommates.management_form }}{{ roommates.non_form_errors }}
     <div id="roommate-forms">{% for roommate in roommates %}<div class="roommate-form contract-fields contract-fields-two">{% for field in roommate %}<label class="field"><span>{{ field.label }}</span>{{ field }}{{ field.errors }}</label>{% endfor %}<button class="button" type="button" data-use-primary-contact>以主租客为紧急联系人</button></div>{% endfor %}</div>

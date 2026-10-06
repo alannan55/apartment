@@ -803,6 +803,12 @@ input[type="checkbox"].input {
 .card-more > div { position: absolute; right: 0; top: 100%; z-index: 10; width: 155px; border: 1px solid var(--line); box-shadow: 0 8px 24px #10231f20; border-radius: 8px; background: #fff; padding: 5px; }
 .card-more > div a { border: 0; justify-content: flex-start; padding-left: 15px; }
 .person-search { padding: 16px; margin-bottom: 14px; background: #f8faf9; border-radius: 8px; }
+.entry-tasks { padding: 16px; margin-bottom: 20px; background: #f3f8f6; border-radius: 8px; }
+.entry-tasks h2 { margin-top: 0; font-size: 18px; }
+.entry-tasks [data-entry-task-list] { display: grid; gap: 8px; margin-bottom: 12px; }
+.entry-task { white-space: normal; text-align: left; justify-content: flex-start; }
+.term-shortcuts, .pagination { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 12px; }
+.pagination { justify-content: center; margin-bottom: 20px; }
 .search-results { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .calculation-preview { border: 1px solid #acd3c8; border-radius: 8px; background: #f1faf6; padding: 14px 18px; margin: 20px 0; line-height: 1.6; }
 .contract-form .calculation-preview { margin: 16px 20px; }
@@ -957,3 +963,16 @@ button:disabled { opacity: .6; cursor: wait; }
   .topbar { flex-direction: row; align-items: center; gap: 12px; }
   .login-panel { margin: 20px auto; padding: 22px; }
 }
+[hidden] { display: none !important; }
+.collection-modes { display: flex; gap: 8px; margin: 0 0 20px; }
+.collection-modes a { padding: 10px 18px; border: 1px solid var(--line); border-radius: 8px; background: white; color: var(--text); }
+.collection-modes a.active { color: var(--primary-strong); background: var(--surface-soft); border-color: var(--primary); font-weight: 700; }
+.accounting-entry { max-width: 880px; margin: 0 auto; }
+.accounting-entry .form-grid > div { min-width: 0; }
+.accounting-entry select { max-width: 100%; text-overflow: ellipsis; }
+.entry-hint { color: var(--muted); font-size: 14px; line-height: 1.7; }
+.ledger-contract { display: block; max-width: 230px; color: var(--muted); font-size: 12px; margin-top: 5px; }
+.accounting-head .button { white-space: nowrap; }
+.accounting-entry > .form-grid + .form-grid { margin-top: 20px; }
+.bill-dated-payment { display: grid; gap: 10px; margin-top: 12px; }
+.bill-dated-payment label { display: grid; gap: 5px; font-size: 12px; }

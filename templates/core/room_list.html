@@ -9,9 +9,8 @@
   <div class="actions">
     <a class="button primary" href="{% url 'sign_contract' %}">办理入住</a>
     <a class="button primary" href="{% url 'monthly_rent_collection' %}">按月收租</a>
-    <a class="button" href="{% url 'payment_create' %}?direction=receive">收款</a>
-    <a class="button" href="{% url 'deposit_collection' %}">批量登记押金</a>
-    <a class="button" href="{% url 'payment_create' %}?direction=pay">记支出</a>
+    <a class="button" href="{% url 'accounting_entry' %}?direction=receive">记一笔</a>
+    <a class="button" href="{% url 'accounting_entry' %}?direction=pay">记支出</a>
     <a class="button" href="{% url 'agent_preview' %}">中介房态</a>
     <a class="button" href="{% url 'police_preview' %}">生成报备表</a>
     <a class="button" href="{% url 'room_create' %}">新增房间</a>
@@ -112,7 +111,7 @@
         <div class="room-finance {% if finance.tenant_due > 0 or finance.expense_due > 0 %}room-finance-alert{% endif %}">
           <div class="room-finance-main">
             {% if finance.tenant_due > 0 %}
-              <span>到期未收</span>
+              <span>房间到期未收</span>
               <a class="amount-warn" href="{% url 'bill_list' %}?room={{ room.id }}&timing=due&status=open"><strong>¥{{ finance.tenant_due }}</strong></a>
             {% elif tenancy and not tenancy.billing_enabled and not finance.has_receivables %}
               <span>房租记录</span>
@@ -123,6 +122,8 @@
             {% endif %}
           </div>
           <div class="room-finance-detail">
+            {% if finance.historical_due > 0 %}<span>历史租客欠款 ¥{{ finance.historical_due }}</span><span>当前租客到期未收 ¥{{ finance.current_due }}</span>{% endif %}
+            {% if tenancy and not tenancy.billing_enabled and not finance.has_receivables %}<span>当前合同账务待登记</span>{% endif %}
             {% if finance.rent_due > 0 %}<span>租金 ¥{{ finance.rent_due }}</span>{% endif %}
             {% if finance.deposit_due > 0 %}<span>押金 ¥{{ finance.deposit_due }}</span>{% endif %}
             {% if finance.heating_due > 0 %}<span>取暖 ¥{{ finance.heating_due }}</span>{% endif %}
@@ -135,7 +136,7 @@
         </div>
 
         <footer class="room-card-actions">
-          {% if room.status == 'vacant' %}<a class="primary-action" href="{% url 'room_contract_create' room.id %}">办理入住</a>{% else %}<a class="primary-action" href="{% url 'payment_create' %}?room={{ room.id }}">收款</a>{% endif %}
+          {% if room.status == 'vacant' %}<a class="primary-action" href="{% url 'room_contract_create' room.id %}">办理入住</a>{% else %}<a class="primary-action" href="{% url 'accounting_entry' %}?room={{ room.id }}">记一笔</a>{% endif %}
           <a href="{% url 'person_list' %}?room={{ room.id }}">人员</a>
           <a href="{% url 'room_detail' room.id %}">详情</a>
           <details class="card-more"><summary>操作</summary><div>

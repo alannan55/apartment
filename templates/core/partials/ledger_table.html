@@ -31,11 +31,11 @@
           </td>
           <td>
             {% if row.room %}<a href="{% url 'room_detail' row.room.id %}">{{ row.room.number }}</a>{% endif %}
-            {% if row.person %} {{ row.person.name }}{% endif %}
+            {% if row.person %} {{ row.person.name }}{% endif %}{% if row.tenancy %}<small class="ledger-contract">合同 {{ row.tenancy.start_date|date:"Y-m-d" }} 至 {{ row.tenancy.end_date|date:"Y-m-d" }}</small>{% endif %}
           </td>
           <td>¥{{ row.amount }}</td>
           <td>¥{{ row.balance }}</td>
-          <td>{{ row.status }}</td>
+          <td>{{ row.status }}{% if row.deposit_offset %}<small>押金抵扣 ¥{{ row.deposit_offset }}</small>{% endif %}</td>
           <td>{{ row.description }}{% if row.kind == 'payment' and row.obj.allocations.all %}<details><summary>查看抵扣明细</summary>{% for allocation in row.obj.allocations.all %}<p>{{ allocation.charge.description }}：¥{{ allocation.amount }}</p>{% endfor %}</details>{% endif %}</td>
           <td class="row-actions">
             {% if row.kind == "payment" %}

@@ -328,6 +328,7 @@ class BillingServiceTests(TestCase):
             end_date=date(2026, 12, 31),
             monthly_rent=Decimal("3000.00"),
         )
+        collect_charge(tenancy.charges.get(category=Charge.Category.DEPOSIT), amount=3500, date=date(2026, 6, 1))
         checkout_tenancy(tenancy, checkout_date=date(2026, 6, 1), refund_deposit_amount=Decimal("3500.00"))
         stay = Stay.objects.get(tenancy=tenancy)
         self.assertFalse(stay.is_active)
@@ -538,7 +539,7 @@ class BillingServiceTests(TestCase):
             room=self.room,
             memo="手动收款测试",
         )
-        response = self.client.get("/charges/?status=payments")
+        response = self.client.get("/charges/?status=payments&month=")
         self.assertContains(response, "手动收款测试")
         self.assertContains(response, "流水")
 
@@ -790,7 +791,7 @@ class BillingServiceTests(TestCase):
         ]
         self.assertEqual(business_updates, [])
 
-    @patch("core.views.generate_due_charges", side_effect=OperationalError("database is locked"))
+    @patch("core.views.ensure_billing", side_effect=OperationalError("database is locked"))
     def test_collection_page_survives_database_lock(self, _generate):
         response = self.client.get("/collections/?month=2026-06")
         self.assertEqual(response.status_code, 200)

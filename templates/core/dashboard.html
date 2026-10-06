@@ -8,7 +8,7 @@
   </div>
   <div class="actions">
     <a class="button primary" href="{% url 'sign_contract' %}">签约</a>
-    <a class="button" href="{% url 'payment_create' %}">收付款</a>
+    <a class="button" href="{% url 'accounting_entry' %}">收付款</a>
     <a class="button" href="{% url 'person_create' %}">新增人员</a>
   </div>
 </section>
@@ -31,7 +31,7 @@
   <a class="button" href="{% url 'export_police' %}">导出警务报备</a>
   <a class="button" href="{% url 'export_import_template' %}">下载导入模板</a>
   <a class="button" href="{% url 'import_workbook' %}">导入表格</a>
-  <a class="button" href="{% url 'charge_create' %}">新增账单</a>
+  <a class="button" href="{% url 'accounting_entry' %}?state=pending">新增账单</a>
 </section>
 
 <section class="split">

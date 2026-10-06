@@ -252,13 +252,16 @@ AGENT_FEE_LABELS = {
     "water_fee": "水费", "electricity_fee": "电费", "property_fee": "物业费",
     "internet_fee": "网费", "heating_fee": "取暖费", "parking_fee": "停车费",
 }
+DEFAULT_AGENT_CONTACT = {"name": "张小姐", "phone": "18518699513"}
 
 
-def agent_room_status_data(today=None, *, include_commission=True, include_password=True):
+def agent_room_status_data(today=None, *, include_commission=True, include_password=True, include_contact=True):
     today = today or timezone.localdate()
     all_rooms = list(Room.objects.order_by("number"))
     settings = ApartmentSettings.objects.filter(pk=1).first()
     public_fees = settings.fee_defaults.get("agent_fees", {}) if settings else {}
+    contact = settings.fee_defaults.get("agent_contact", DEFAULT_AGENT_CONTACT) if settings else DEFAULT_AGENT_CONTACT
+    contact_text = " ".join(str(contact.get(field, "")).strip() for field in ("name", "phone") if contact.get(field)) if include_contact else ""
 
     def displayed_fees(room):
         fees = []
@@ -313,11 +316,12 @@ def agent_room_status_data(today=None, *, include_commission=True, include_passw
         "today": today, "room_rows": room_rows, "fees": fees, "uniform_fees": uniform_fees,
         "vacant_count": sum(item["vacant"] for item in room_rows),
         "expiring_count": sum(not item["vacant"] for item in room_rows),
+        "contact_text": contact_text,
     }
 
 
-def agent_room_status_image(today=None, *, include_commission=True, include_password=True):
-    data = agent_room_status_data(today, include_commission=include_commission, include_password=include_password)
+def agent_room_status_image(today=None, *, include_commission=True, include_password=True, include_contact=True):
+    data = agent_room_status_data(today, include_commission=include_commission, include_password=include_password, include_contact=include_contact)
     width, padding, gap = 1080, 48, 20
     content_width = width - 2 * padding
     title_font, room_font = _font(44, bold=True), _font(38, bold=True)
@@ -348,7 +352,9 @@ def agent_room_status_image(today=None, *, include_commission=True, include_pass
         card_height = 124 + len(number_lines) * 48 + len(wrapped) * 34
         cards.append((item, number_lines, wrapped, card_height))
     commission_lines = _wrap_text(probe, "佣金规则：一年租付满佣金，短租按租期时长比例计算。", small_font, content_width - 48)
-    footer_height = 104 + len(commission_lines) * 32
+    contact_lines = _wrap_text(probe, f"联系看房：{data['contact_text']}", label_font, content_width - 48) if data["contact_text"] else []
+    contact_height = len(contact_lines) * 36 + 16 if contact_lines else 0
+    footer_height = 104 + len(commission_lines) * 32 + contact_height
     height = 254 + fee_height + 74 + sum(card[3] + gap for card in cards) + footer_height
     if not cards:
         height += 164
@@ -402,6 +408,9 @@ def agent_room_status_image(today=None, *, include_commission=True, include_pass
         draw.text((padding + 30, y + 46), "暂无空房或可出租的即将到期房间", font=body_font, fill="#64748B")
         y += 164
     draw.line((padding, y, width - padding, y), fill="#D7E3DE", width=2)
+    for index, line in enumerate(contact_lines):
+        draw.text((padding + 24, y + 18 + index * 36), line, font=label_font, fill="#123D38")
+    y += contact_height
     for index, line in enumerate(commission_lines):
         draw.text((padding + 24, y + 18 + index * 32), line, font=small_font, fill="#475569")
     draw.text((padding + 24, y + 26 + len(commission_lines) * 32), "取暖季：11月15日至次年3月15日 · 房态以最新确认为准", font=small_font, fill="#64748B")
@@ -497,8 +506,8 @@ def police_report_workbook(today=None, *, snapshot=None):
     return workbook
 
 
-def export_agent_room_status(today=None, *, include_commission=True, include_password=True):
-    image = agent_room_status_image(today, include_commission=include_commission, include_password=include_password)
+def export_agent_room_status(today=None, *, include_commission=True, include_password=True, include_contact=True):
+    image = agent_room_status_image(today, include_commission=include_commission, include_password=include_password, include_contact=include_contact)
     return _download_response(image, f"悦山公寓房态_{timezone.localdate():%Y%m%d}.png", "image/png")
 
 

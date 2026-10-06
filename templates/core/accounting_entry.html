@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}记一笔 - 悦山公寓运营{% endblock %}
+{% block content %}
+<section class="page-head"><div><h1>记一笔</h1><p>收到、付出或暂时未结的钱，都在这里记录。</p></div><a class="button" href="{{ return_url }}">返回记账</a></section>
+<form method="post" class="form-panel accounting-entry" data-accounting-entry>
+  {% csrf_token %}{{ form.token }}<input type="hidden" name="next" value="{{ return_url }}">
+  {{ form.non_field_errors }}{{ form.token.errors }}
+  <section class="entry-tasks" data-entry-tasks hidden aria-label="该房间待收待付">
+    <h2>这个房间尚未结清</h2><p>先选择原事项，历史租客的欠款会标明租客姓名。</p>
+    <div data-entry-task-list></div>
+    <button type="button" class="button" data-entry-add>新增其他收支</button>
+  </section>
+  <div class="form-grid">
+    {% include "core/partials/form_field.html" with field=form.charge %}
+  </div>
+  <p class="entry-hint" data-entry-hint>已经登记过待收待付，请选择原事项，避免再记一遍。</p>
+  <div class="form-grid" data-entry-new>
+    {% include "core/partials/form_field.html" with field=form.direction %}
+    {% include "core/partials/form_field.html" with field=form.category %}
+  </div>
+  <details class="advanced-options" data-entry-new data-entry-object {% if form.room.value or form.tenancy.value or form.room.errors or form.tenancy.errors %}open{% endif %}>
+    <summary>关联房间或租客（公共收支可留空）</summary><div class="form-grid">
+    {% include "core/partials/form_field.html" with field=form.room %}
+    {% include "core/partials/form_field.html" with field=form.tenancy %}
+    </div>
+    <p data-entry-tenant aria-live="polite"></p>
+    <a data-entry-refund hidden>办理退租 / 退押金结算</a>
+  </details>
+  <div class="form-grid">
+    {% include "core/partials/form_field.html" with field=form.amount %}
+    <div data-entry-new>{% include "core/partials/form_field.html" with field=form.state %}</div>
+    <div data-entry-partial>{% include "core/partials/form_field.html" with field=form.paid_amount %}</div>
+    {% include "core/partials/form_field.html" with field=form.date %}
+    {% include "core/partials/form_field.html" with field=form.description %}
+  </div>
+  <details class="advanced-options" data-entry-new data-entry-period {% if form.period_start.errors or form.period_end.errors or form.due_date.errors %}open{% endif %}>
+    <summary>费用期间和补充说明</summary>
+    <div class="form-grid">
+      <div data-entry-due>{% include "core/partials/form_field.html" with field=form.due_date %}</div>
+      {% include "core/partials/form_field.html" with field=form.period_start %}
+      {% include "core/partials/form_field.html" with field=form.period_end %}
+      {% include "core/partials/form_field.html" with field=form.notes %}
+    </div>
+  </details>
+  <p class="calculation-preview" data-entry-summary aria-live="polite">保存后自动计算未结金额。</p>
+  <div class="form-actions"><button class="button primary" type="submit">保存这笔记录</button><a class="button ghost" href="{{ return_url }}">取消</a></div>
+</form>
+{{ entry_bills|json_script:"entry-bills" }}{{ entry_contracts|json_script:"entry-contracts" }}
+{% endblock %}
